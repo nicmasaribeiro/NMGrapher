@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 const colors = ['#2864d7','#dd6b35','#8a4dc2','#169582','#cf4166','#a57b17'];
 const examples = {
+ desmos_demo:["f_0(x)=(1-x^2)*exp(-x^2/2)", "f_1(x)=(1-(x^3-3x^2*(1-x))^2)*exp(-(x^3-3x^2*(1-x))^2/2)", "F(x,y)=f_0(x)*f_1(y)", "g(θ,φ)=∫_{0}^{θ} ∫_{0}^{φ} F(x,y) dydx", "d_x(x,y)=d/dx F(x,y)", "N(x)=normaldist(0,1).pdf(x)", "i_0(t)=∫_{0}^{t} N(x) log10(N(x)/f_0(x)) dx", "i_1(t)=∫_{0}^{t} N(x) log10(N(x)/f_1(x)) dx", "p_t(t,N)=∏_{n=1}^{N} f_0(t)", "d/dx ∑_{n=1}^{3} f_0(x)", "c_0(t)=∫_{0}^{t} ∫_{0}^{t} p_t(x,y) dxdy", "c_0(1)"],
  probability:['D=normal(0,1)','pdf(D,x)','cdf(D,x)','N=poisson(4)','pmf(N,2)','B=binomial(10,0.5)','prob(B,3,7)','Q=boltzmann([0,1,2],1)','probabilities(Q)','expected_energy(Q)'],
  linear_algebra:['A = [[2,1],[1,3]]','λ = eigvals(A)','V = eigvecs(A)','A@V - V@diag(λ)','B = [[1,2,3],[2,4,6]]','nullspace(B)','svdU(B) @ svdS(B) @ svdVh(B)'],
  integral_functions:['S_1(x) = x','Q_1(t,x,φ) = -t*x + i*φ','π_1(t,θ,φ) = ∫_{0}^{θ} (S_1(x)*exp(Q_1(t,x,φ))) dx','π_1(0,2,0)','C(t) = t^3','d/dt(C(t))','F(x) = ∫ (sin(x)) dx'],
@@ -28,11 +29,16 @@ const examples = {
 let waveletSettings=WaveletTools.settings(null);
 let graphs=[],graphResults=[],graphSelection='2d',graphEdit=null,graphRevision=0;
 let datasets=[],rows=[],results=[],resultIds=[],view='graph',bounds=[-10,10,-7,7],selectedMatrix='',requestId=0,timer,rendering=false,matrixEdit=null,gridRows=2,gridCols=2,component='real',functionEdit=null;
+const computeClient=new AsyncCompute.ComputeClient();
+let computationLoading=false,paintTimer=null,plotTask=null,plotQueued=false;
+const pendingRows=new Set(),dirtyResults=new Set();
+const deferredResults=new Set();
+let dirtyGraphs=false;
 let symbolTarget=null;
 let dragState=null,dragFrame=0;
-document.addEventListener('focusin',e=>{if(e.target.matches('.expression textarea, #matrixGrid input, #matrixName, #functionForm input, #functionBody, #calculusExpression, #calculusForm input:not([type=checkbox]), #qubitAlpha, #qubitBeta, #qubitName'))symbolTarget=e.target;});
+document.addEventListener('focusin',e=>{if(e.target.matches('.expression:not(.note-cell) textarea, #matrixGrid input, #matrixName, #functionForm input, #functionBody, #calculusExpression, #calculusForm input:not([type=checkbox]), #qubitAlpha, #qubitBeta, #qubitName'))symbolTarget=e.target;});
 const uid=()=>Math.random().toString(36).slice(2,11);
-const newRow=(text='',i=rows.length)=>({id:uid(),text:GreekInput.normalize(text),color:colors[i%colors.length],plotName:'',visible:true,min:-5,max:5,plotComponent:'all',plotSlice:null});
+const newRow=(text='',i=rows.length)=>({id:uid(),type:'expression',text:GreekInput.normalize(text),color:colors[i%colors.length],plotName:'',visible:true,min:-5,max:5,plotComponent:'all',plotSlice:null});
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3500);}
 function fmt(v){return typeof v==='number'?Number(v.toPrecision(7)).toString():String(v);}
 function worksheetData(){return {version:5,rows,datasets,graphs,graphSelection,wavelet_settings:waveletSettings,bounds,view,component,curve_range:[Number($('parameterMin').value),Number($('parameterMax').value)]};}
@@ -46,19 +52,37 @@ function restoreViewOptions(data){
  if(Array.isArray(range)&&range.length===2&&range.every(v=>Number.isFinite(v)&&Math.abs(v)<=1e4)&&range[1]>range[0]){$('parameterMin').value=range[0];$('parameterMax').value=range[1];}
  else{$('parameterMin').value=0;$('parameterMax').value=2*Math.PI;}
 }
-function saveLocal(){try{localStorage.setItem('matrix-graph-v1',JSON.stringify(worksheetData()));saveLocal.warned=false;}catch{if(!saveLocal.warned){toast('Browser storage is full. Use Save worksheet to keep your data.');saveLocal.warned=true;}}}
+function saveLocal(){try{localStorage.setItem('matrix-graph-v1',JSON.stringify(worksheetData()));saveLocal.warned=false;return true;}catch{if(!saveLocal.warned){toast('Browser storage is full. Use Save worksheet to keep your data.');saveLocal.warned=true;}return false;}}
+function reloadSystem(){
+ document.activeElement?.blur();
+ if(!saveLocal()){toast('Reload stopped because the worksheet could not be saved. Use Save worksheet to download a copy first.');return false;}
+ clearTimeout(timer);requestId++;
+ window.location.reload();
+ return true;
+}
+$('reloadBtn').onclick=reloadSystem;
 function validateWorksheet(data){
  if(!data || !Array.isArray(data.rows) || data.rows.length>40)throw Error('The file must contain at most 40 expression rows.');
- return data.rows.map((r,i)=>{if(!r || typeof r.text!=='string' || r.text.length>1200)throw Error('Invalid expression in worksheet.');if(r.plotName!==undefined&&(typeof r.plotName!=='string'||r.plotName.length>80))throw Error('Plot names support at most 80 characters.');return {...newRow(r.text,i),plotName:r.plotName?.trim()||'',...(typeof r.color==='string'&&/^#[0-9a-f]{6}$/i.test(r.color)?{color:r.color}:{}),plotSlice:validPlotSlice(r.plotSlice)?r.plotSlice:null,plotComponent:Number.isInteger(r.plotComponent)&&r.plotComponent>=0&&r.plotComponent<1024?r.plotComponent:'all',visible:r.visible!==false,min:Number.isFinite(r.min)?r.min:-5,max:Number.isFinite(r.max)?r.max:5};});
+ return data.rows.map((r,i)=>{if(!r || typeof r.text!=='string' || r.text.length>1200)throw Error('Invalid expression in worksheet.');if(r.plotName!==undefined&&(typeof r.plotName!=='string'||r.plotName.length>80))throw Error('Plot names support at most 80 characters.');if(r.type!==undefined&&!['expression','note'].includes(r.type))throw Error('Unknown worksheet cell type.');return {...newRow(r.type==='note'?'':r.text,i),...(r.type==='note'?{type:'note',text:r.text}:{}),plotName:r.plotName?.trim()||'',...(typeof r.color==='string'&&/^#[0-9a-f]{6}$/i.test(r.color)?{color:r.color}:{}),plotSlice:validPlotSlice(r.plotSlice)?r.plotSlice:null,plotComponent:Number.isInteger(r.plotComponent)&&r.plotComponent>=0&&r.plotComponent<1024?r.plotComponent:'all',visible:r.visible!==false,min:Number.isFinite(r.min)?r.min:-5,max:Number.isFinite(r.max)?r.max:5};});
 }
-function loadExample(name){if(!examples[name])return;graphs=[];graphResults=[];renderGraphs();rows=examples[name].map(newRow);if(name==='qubit'){rows[0].min=0;rows[0].max=Math.PI;rows[1].min=0;rows[1].max=2*Math.PI;}if(name==='wavelet'){rows[0].min=0.1;rows[0].max=4;}if(name==='ctmc'){rows[0].min=0;rows[0].max=20;}view=['qubit','bell'].includes(name)?'quantum':name==='ctmc'||name==='hermitian'?'heatmap':['complex','greek'].includes(name)?'complex':name==='domain'?'domain':['two_vars','partials','n_vars'].includes(name)?'surface':'graph';if(view==='domain')component='phase';if(view==='surface')component='real';selectedMatrix=['ctmc','qubit'].includes(name)?rows[2].id:name==='bell'?rows[0].id:'';bounds=['complex','domain','hermitian','greek','two_vars','calculus','partials'].includes(name)?[-4,4,-3,3]:[-10,10,-7,7];renderRows();schedule(0);}
+function loadExample(name){if(!examples[name])return;graphs=[];graphResults=[];renderGraphs();rows=examples[name].map(newRow);if(name==='qubit'){rows[0].min=0;rows[0].max=Math.PI;rows[1].min=0;rows[1].max=2*Math.PI;}if(name==='wavelet'){rows[0].min=0.1;rows[0].max=4;}if(name==='ctmc'){rows[0].min=0;rows[0].max=20;}view=['qubit','bell'].includes(name)?'quantum':name==='ctmc'||name==='hermitian'?'heatmap':['complex','greek'].includes(name)?'complex':name==='domain'?'domain':['two_vars','partials','n_vars'].includes(name)?'surface':'graph';if(view==='domain')component='phase';if(view==='surface')component='real';selectedMatrix=['ctmc','qubit'].includes(name)?rows[2].id:name==='bell'?rows[0].id:'';bounds=['complex','domain','hermitian','greek','two_vars','calculus','partials'].includes(name)?[-4,4,-3,3]:[-10,10,-7,7];if(name==='desmos_demo'){bounds=[0,0.75,0,0.75];$('parameterMin').value=0;$('parameterMax').value=0.75;}renderRows();schedule(0);}
 function addExpression(text=''){if(rows.length>=40){toast('Maximum 40 expressions per worksheet.');return;}rows.push(newRow(text));renderRows();schedule(0);$('expressions').lastElementChild.querySelector('textarea').focus();}
+function addNote(){if(rows.length>=40){toast('Maximum 40 cells per worksheet.');return;}rows.push({...newRow(),type:'note'});renderRows();schedule(0);$('expressions').lastElementChild.querySelector('textarea').focus();}
+$('addNoteBtn').onclick=addNote;
+function firstEquationInput(){let input=$('expressions').querySelector('.expression:not(.note-cell) textarea');if(!input){addExpression();input=$('expressions').querySelector('.expression:not(.note-cell) textarea');}return input;}
 function renderRows(){
  const prior=new Map(resultIds.map((id,i)=>[id,results[i]]));results=rows.map(row=>{const r=prior.get(row.id);return r&&r.text===row.text.trim()?r:{kind:'empty',text:row.text.trim()};});resultIds=rows.map(row=>row.id);
  const container=$('expressions');container.replaceChildren();$('rowCount').textContent=rows.length;
  rows.forEach((row,index)=>{
-  const el=document.createElement('article');el.className='expression';el.dataset.id=row.id;el.style.setProperty('--row-color',row.color);
-  const handle=document.createElement('button');handle.type='button';handle.className='drag-handle';handle.textContent='⋮⋮';handle.title='Drag to reorder · arrow keys move';handle.setAttribute('aria-label',`Move equation ${index+1}`);handle.setAttribute('aria-describedby','reorderHelp');handle.onpointerdown=e=>beginRowDrag(e,row.id,handle);handle.onkeydown=e=>{const at=rows.findIndex(r=>r.id===row.id);let to;if(e.key==='ArrowUp')to=at-1;else if(e.key==='ArrowDown')to=at+1;else if(e.key==='Home')to=0;else if(e.key==='End')to=rows.length-1;else return;e.preventDefault();moveRow(row.id,to);};el.append(handle);
+  const el=document.createElement('article');el.className='expression'+(row.type==='note'?' note-cell':'');el.dataset.id=row.id;el.style.setProperty('--row-color',row.color);
+  const handle=document.createElement('button');handle.type='button';handle.className='drag-handle';handle.textContent='⋮⋮';handle.title='Drag to reorder · arrow keys move';handle.setAttribute('aria-label',`Move ${row.type==='note'?'note':'equation'} ${index+1}`);handle.setAttribute('aria-describedby','reorderHelp');handle.onpointerdown=e=>beginRowDrag(e,row.id,handle);handle.onkeydown=e=>{const at=rows.findIndex(r=>r.id===row.id);let to;if(e.key==='ArrowUp')to=at-1;else if(e.key==='ArrowDown')to=at+1;else if(e.key==='Home')to=0;else if(e.key==='End')to=rows.length-1;else return;e.preventDefault();moveRow(row.id,to);};el.append(handle);
+  if(row.type==='note'){
+   const number=document.createElement('span');number.className='row-number';number.textContent=index+1;el.append(number);
+   const heading=document.createElement('div');heading.className='note-heading';const label=document.createElement('span');label.textContent='Note';
+   const remove=document.createElement('button');remove.type='button';remove.className='remove';remove.textContent='×';remove.setAttribute('aria-label',`Delete note ${index+1}`);remove.onclick=()=>{rows=rows.filter(r=>r.id!==row.id);renderRows();schedule(0);};heading.append(label,remove);el.append(heading);
+   const input=document.createElement('textarea');input.className='note-input';input.value=row.text;input.rows=3;input.maxLength=1200;input.spellcheck=true;input.placeholder='Write a reminder, idea, or next step…';input.setAttribute('aria-label',`Note ${index+1}`);
+   input.oninput=()=>{row.text=input.value;input.style.height='auto';input.style.height=Math.min(300,Math.max(84,input.scrollHeight))+'px';saveLocal();};el.append(input);container.append(el);input.style.height=Math.min(300,Math.max(84,input.scrollHeight))+'px';return;
+  }
   const toggle=document.createElement('button');toggle.className='color-toggle'+(row.visible?'':' off');toggle.title='Show or hide plot';toggle.setAttribute('aria-label',`Show expression ${index+1}`);toggle.setAttribute('aria-pressed',String(row.visible));toggle.onclick=()=>{row.visible=!row.visible;toggle.classList.toggle('off',!row.visible);toggle.setAttribute('aria-pressed',String(row.visible));saveLocal();drawPlot();};el.append(toggle);
   const n=document.createElement('span');n.className='row-number';n.textContent=index+1;el.append(n);
   const top=document.createElement('div');top.className='row-top';const input=document.createElement('textarea');input.value=row.text;input.rows=1;input.spellcheck=false;input.placeholder='Enter an expression…';input.setAttribute('aria-label',`Expression ${index+1}`);
@@ -67,22 +91,56 @@ function renderRows(){
   const preview=document.createElement('div');preview.className='math-preview';renderMath(preview,row.text);el.append(preview);
   const result=document.createElement('div');result.className='result';el.append(result);container.append(el);input.style.height=Math.min(160,Math.max(36,input.scrollHeight))+'px';
  });
+ renderResults();
 }
-function schedule(delay=280){clearTimeout(timer);requestId++;$('status').textContent='Updating…';timer=setTimeout(evaluate,delay);saveLocal();}
+function setComputing(active,message){
+ computationLoading=active;$('stopComputeBtn').hidden=!active;$('plot').setAttribute('aria-busy',String(active));
+ $('plotLoading').hidden=!active;if(message){$('status').textContent=message;$('plotLoading').textContent=message;}
+ for(let i=0;i<rows.length;i++){const el=document.querySelector(`.expression[data-id="${rows[i].id}"]`);if(!el)continue;const pending=active&&pendingRows.has(i)&&rows[i].type!=='note';el.classList.toggle('calculation-pending',pending);el.setAttribute('aria-busy',String(pending));}
+}
+function queueResultPaint(){
+ if(paintTimer!==null)return;
+ paintTimer=setTimeout(()=>{paintTimer=null;const indices=new Set(dirtyResults);dirtyResults.clear();renderResults(indices);if(dirtyGraphs){dirtyGraphs=false;renderGraphs();}drawPlot().catch(error=>toast(error.message));},80);
+}
+function schedule(delay=160){
+ clearTimeout(timer);requestId++;computeClient.cancel();pendingRows.clear();rows.forEach((row,index)=>{if(row.type!=='note')pendingRows.add(index);});
+ setComputing(true,'Waiting to calculate…');timer=setTimeout(evaluate,delay);saveLocal();
+}
 async function evaluate(){
- const id=requestId;const snapshotIds=rows.map(row=>row.id);
- try{
-  const post=async (url,payload)=>{const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not calculate.');return data;};
-  const [data,created]=await Promise.all([post('/api/evaluate',{datasets,expressions:rows.map(r=>({text:r.text,plot_component:r.plotComponent??'all',plot_slice:r.plotSlice})),bounds,complex_domain:view==='domain',...(view==='complex'?{curve_range:[Number($('parameterMin').value),Number($('parameterMax').value)]}:{})}),graphs.length?post('/api/graphs',{graphs,expressions:rows.map(r=>({text:r.text})),datasets}):Promise.resolve({results:[]})]);
-  if(id!==requestId)return;results=data.results;graphResults=created.results;resultIds=snapshotIds;renderResults();renderGraphs();await drawPlot();
-  const errors=results.filter(r=>r.error).length+graphResults.filter(r=>r.error).length;$('status').textContent=errors?`${errors} item${errors===1?'':'s'} to check`:'All expressions and graphs updated';
- }catch(e){if(id===requestId){$('status').textContent='Could not update';toast(e.message);}}
+ const id=requestId;const snapshotIds=rows.map(row=>row.id);const snapshotGraphs=graphs.map(graph=>graph.id);
+ const current=()=>id===requestId;
+ const payload={datasets,expressions:rows.map(r=>({type:r.type??'expression',text:r.text,plot_component:r.plotComponent??'all',plot_slice:r.plotSlice})),graphs,bounds,complex_domain:view==='domain',...(view==='complex'?{curve_range:[Number($('parameterMin').value),Number($('parameterMax').value)]}:{})};
+ resultIds=snapshotIds;
+ const finish=(message)=>{pendingRows.clear();setComputing(false,message);queueResultPaint();};
+ return computeClient.run(payload,{
+  onStart:job=>{if(current())setComputing(true,`Calculating · 0/${job.total} complete`);},
+  onResult:record=>{
+   if(!current()||!Number.isInteger(record.index)||record.index<0||!record.result)return;
+   if(record.kind==='row'&&record.index<snapshotIds.length&&rows[record.index]?.id===snapshotIds[record.index]){
+    results[record.index]=record.result;pendingRows.delete(record.index);dirtyResults.add(record.index);
+    const el=document.querySelector(`.expression[data-id="${snapshotIds[record.index]}"]`);el?.classList.remove('calculation-pending');el?.setAttribute('aria-busy','false');
+   }else if(record.kind==='graph'&&record.index<snapshotGraphs.length&&graphs[record.index]?.id===snapshotGraphs[record.index]){
+    graphResults=graphResults.filter(r=>r.id!==snapshotGraphs[record.index]);graphResults.push(record.result);dirtyGraphs=true;
+   }else return;
+   queueResultPaint();
+  },
+  onProgress:update=>{if(current()){$('status').textContent=`Calculating · ${update.completed}/${update.total} complete`;$('plotLoading').textContent=$('status').textContent;if(update.notice&&computeClient.notice!==update.notice){computeClient.notice=update.notice;toast(update.notice);}}},
+  onDone:()=>{if(!current())return;const errors=results.filter(r=>r.error).length+graphResults.filter(r=>r.error).length;finish(errors?`${errors} item${errors===1?'':'s'} to check`:'All expressions and graphs updated');},
+  onCancelled:()=>{if(current())finish('Calculation stopped. Existing plots are retained.');},
+  onError:error=>{if(current()){finish('Could not complete calculations');toast(error.message);}}
+ });
 }
-function renderResults(){
+$('stopComputeBtn').onclick=()=>{clearTimeout(timer);requestId++;computeClient.cancel();pendingRows.clear();setComputing(false,'Calculation stopped. Existing plots are retained.');};
+window.addEventListener('pagehide',()=>computeClient.cancel());
+document.addEventListener('focusout',()=>{if(deferredResults.size)setTimeout(()=>{const indices=new Set();for(const id of deferredResults){const index=rows.findIndex(row=>row.id===id);if(index<0)deferredResults.delete(id);else indices.add(index);}renderResults(indices);},0);});
+function renderResults(indices=null){
  rows.forEach((row,i)=>{
-  const el=document.querySelector(`.expression[data-id="${row.id}"]`);if(!el)return;const box=el.querySelector('.result');box.replaceChildren();const r=results[i];if(!r)return;
+  if(indices&&!indices.has(i))return;
+  if(row.type==='note')return;
+  const el=document.querySelector(`.expression[data-id="${row.id}"]`);if(!el)return;const box=el.querySelector('.result');if(box.contains(document.activeElement)){deferredResults.add(row.id);return;}deferredResults.delete(row.id);box.replaceChildren();const r=results[i];if(!r)return;
   box.className='result'+(r.error?' error':'');if(r.function){const b=document.createElement('button');b.textContent='Edit function';b.className='edit-function';b.onclick=()=>openFunction(i);box.append(b);const calculus=document.createElement('button');calculus.textContent='Calculus';calculus.className='edit-function';calculus.onclick=()=>openCalculus(i);box.append(calculus);if(r.kind==='surface'&&!r.error){const surface=document.createElement('button');surface.className='edit-function';surface.textContent='Surface';surface.onclick=()=>selectView('surface',row.id);box.append(surface);}}if(r.function&&r.function.parameters.length>1)renderSliceControls(box,row,r);if(r.error){const error=document.createElement('div');error.textContent=r.error;box.append(error);return;}
-  if(r.kind==='wavelet_transform'){
+  if(r.kind==='distribution_function'){const tag=document.createElement('div');tag.className='result-tag';tag.textContent='Distribution-valued function · call with parameter values, then use .pdf(x) or .cdf(x).';box.append(tag);
+  }else if(r.kind==='wavelet_transform'){
    const t=r.transform,tag=document.createElement('div');tag.className='result-tag';tag.textContent=`${t.type.toUpperCase()} · ${t.wavelet} · ${t.length} samples · ${t.labels.length} bands/scales`;box.append(tag);
    const source=r.name||r.text;for(const [label,formula] of [['Coefficients',`wavelet_coeffs(${source},0)`],...(t.type==='dwt'?[['Reconstruct',`idwt(${source})`]]:[['Power',`wavelet_power(${source},0)`],['Frequencies',`wavelet_frequencies(${source})`]])]){const b=document.createElement('button');b.className='edit-function';b.textContent=label;b.onclick=()=>addExpression(formula);box.append(b);}
   }else if(r.kind==='distribution'){
@@ -117,6 +175,7 @@ function renderResults(){
    select.value=String(r.selected_component);select.onchange=()=>{row.plotComponent=select.value==='all'?'all':Number(select.value);schedule(0);};label.append(select);box.append(label);
   }
   if(r.quantum){const button=document.createElement('button');button.className='edit-function';button.textContent=r.quantum.qubits===1?'Bloch sphere':'Quantum probabilities';button.onclick=()=>selectView('quantum',row.id);box.append(button);}
+  if(r.sampling?.notice){const note=document.createElement('div');note.className='calculus-note';note.textContent=r.sampling.notice;box.append(note);}
   if(r.calculus?.length){const info=r.calculus[r.calculus.length-1];const note=document.createElement('div');note.className='calculus-note';note.textContent=`Numerical ${info.operation} · estimated error ${info.error_estimate===null?'unavailable':Number(info.error_estimate).toExponential(2)}${info.undefined_samples?' · '+info.undefined_samples+' undefined entries':''}${info.evaluations?' · '+info.evaluations+' evaluations':''}${info.variables?' · '+info.variables.join(', '):''}`;box.append(note);}
   const match=row.text.match(/^\s*([\p{L}_][\p{L}\p{N}_]*)\s*=\s*(-?(?:\d+\.?\d*|\.\d+))\s*$/u);
   if(match&&r.kind==='scalar'&&Number.isFinite(r.numeric)){
@@ -129,7 +188,11 @@ function renderResults(){
 }
 function selectView(next,id){view=next;if(id)selectedMatrix=id;if(view==='domain'&&!['magnitude','phase'].includes(component))component='phase';schedule(0);}
 function graphLayout(){return {margin:{l:42,r:20,t:20,b:35},paper_bgcolor:'#fff',plot_bgcolor:'#fff',font:{family:'Inter, Segoe UI, sans-serif',color:'#637285',size:12},showlegend:false,dragmode:'pan',hovermode:'closest',xaxis:{range:bounds.slice(0,2),zeroline:true,zerolinecolor:'#8290a0',zerolinewidth:1.5,gridcolor:'#e9edf3',ticks:'outside',tickcolor:'#cbd4df'},yaxis:{range:bounds.slice(2),zeroline:true,zerolinecolor:'#8290a0',zerolinewidth:1.5,gridcolor:'#e9edf3',ticks:'outside',tickcolor:'#cbd4df'}};}
-async function drawPlot(){
+function drawPlot(){
+ plotQueued=true;if(plotTask)return plotTask;
+ plotTask=(async()=>{try{while(plotQueued){plotQueued=false;await drawPlotNow();}}finally{plotTask=null;}})();return plotTask;
+}
+async function drawPlotNow(){
  if(!window.Plotly){toast('Plot library could not load. Check the static files.');return;}
  document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===view)));
  const plotResults=results.flatMap((r,i)=>(r.components||[r]).map((c,k)=>({r:{...r,...c,text:GraphTools.label(rows[i]?.plotName||r.text)+(c.label?' '+c.label:'')},i,color:k?colors[(i+k)%colors.length]:rows[i]?.color})));
@@ -227,12 +290,13 @@ $('resetBtn').onclick=()=>{if(view==='created'){const change=$('plot').layout?.s
 $('saveBtn').onclick=()=>{const blob=new Blob([JSON.stringify(worksheetData(),null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='NMGrapher-worksheet.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast('Worksheet downloaded.');};
 $('importBtn').onclick=()=>$('fileInput').click();$('fileInput').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>2*1024*1024)throw Error('Choose a worksheet smaller than 2 MB.');const data=JSON.parse(await file.text());const importedRows=validateWorksheet(data);DatasetTools.validate(data.datasets??[]);GraphTools.validate(data.graphs??[]);WaveletTools.settings(data.wavelet_settings);rows=importedRows;bounds=validBounds(data.bounds)?data.bounds:[-10,10,-7,7];view=['graph','heatmap','transform','complex','domain','surface','quantum','created'].includes(data.view)?data.view:'graph';restoreViewOptions(data);renderRows();schedule(0);toast('Worksheet opened.');}catch(err){toast(err.message);}e.target.value='';};
 function validBounds(b){return Array.isArray(b)&&b.length===4&&b.every(v=>Number.isFinite(v)&&Math.abs(v)<=1e6)&&b[1]>b[0]&&b[3]>b[2];}
-try{const data=JSON.parse(localStorage.getItem('matrix-graph-v1'));if(data){const importedRows=validateWorksheet(data);DatasetTools.validate(data.datasets??[]);GraphTools.validate(data.graphs??[]);WaveletTools.settings(data.wavelet_settings);rows=importedRows;bounds=validBounds(data.bounds)?data.bounds:bounds;view=['graph','heatmap','transform','complex','domain','surface','quantum','created'].includes(data.view)?data.view:'graph';restoreViewOptions(data);}}catch{}
-if(!rows.length&&!datasets.length&&!graphs.length)rows=examples.basics.map(newRow);renderRows();schedule(0);
+let restoredWorksheet=false;
+try{const data=JSON.parse(localStorage.getItem('matrix-graph-v1'));if(data){const importedRows=validateWorksheet(data);DatasetTools.validate(data.datasets??[]);GraphTools.validate(data.graphs??[]);WaveletTools.settings(data.wavelet_settings);rows=importedRows;bounds=validBounds(data.bounds)?data.bounds:bounds;view=['graph','heatmap','transform','complex','domain','surface','quantum','created'].includes(data.view)?data.view:'graph';restoreViewOptions(data);restoredWorksheet=true;}}catch{}
+if(!restoredWorksheet)rows=examples.basics.map(newRow);renderRows();schedule(0);
 new ResizeObserver(()=>{if($('plot').data)Plotly.Plots.resize('plot');}).observe($('plot'));
 
 async function openGreek(){
- if(!symbolTarget?.isConnected){if($('qubitDialog').open)symbolTarget=$('qubitName');else if($('calculusDialog').open)symbolTarget=$('calculusExpression');else if($('functionDialog').open)symbolTarget=$('functionBody');else if(!$('matrixDialog').open){if(!rows.length)addExpression();symbolTarget=$('expressions').querySelector('textarea');}else symbolTarget=$('matrixName');}
+ if(!symbolTarget?.isConnected){if($('qubitDialog').open)symbolTarget=$('qubitName');else if($('calculusDialog').open)symbolTarget=$('calculusExpression');else if($('functionDialog').open)symbolTarget=$('functionBody');else if(!$('matrixDialog').open){symbolTarget=firstEquationInput();}else symbolTarget=$('matrixName');}
  try{
   if(!$('greekLetters').children.length){
    const res=await fetch('/api/symbols');if(!res.ok)throw Error('Could not load Greek symbols.');const catalog=await res.json();
@@ -264,11 +328,11 @@ $('functionForm').onsubmit=async e=>{
  e.preventDefault();const text=functionDraft(),index=functionEdit??rows.length;
  if(text.length>1200){$('functionError').textContent='Function exceeds 1200 characters.';return;}
  if(functionEdit===null&&rows.length>=40){$('functionError').textContent='Maximum 40 expressions.';return;}
- const candidate=rows.map(r=>({text:r.text}));if(functionEdit===null)candidate.push({text});else candidate[index]={text};
+ const candidate=rows.map(r=>({type:r.type??'expression',text:r.text}));if(functionEdit===null)candidate.push({text});else candidate[index]={text};
  const button=e.submitter||$('functionForm').querySelector('button[type=submit]');button.disabled=true;
  try{
-  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets,expressions:candidate,bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not validate function.');
-  const result=data.results[index];if(!result.function)throw Error(result.error||'Use a valid function name and distinct argument names.');
+  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets,expressions:candidate,indices:[index],validate_only:true,bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not validate function.');
+  const result=data.results[0];if(result.error||!result.function)throw Error(result.error||'Use a valid function name and distinct argument names.');
   if(functionEdit===null)rows.push(newRow(text));else {rows[index].text=text;rows[index].plotComponent='all';rows[index].plotSlice=null;}
   if(result.function.parameters.length>=2){view='surface';component='real';selectedMatrix=rows[index].id;}
   $('functionDialog').close();renderRows();schedule(0);
@@ -277,7 +341,8 @@ $('functionForm').onsubmit=async e=>{
 document.querySelectorAll('[data-script]').forEach(button=>button.onclick=()=>{
  let target=symbolTarget;
  if($('functionDialog').open&&!target?.closest('#functionForm'))target=$('functionBody');
- if(!target?.isConnected){if(!rows.length)addExpression();target=$('expressions').querySelector('textarea');}
+ if(!target?.isConnected){target=firstEquationInput();}
+ if(!target)return;
  const start=target.selectionStart??target.value.length,end=target.selectionEnd??start;
  const token=button.dataset.script==='sub'?'_1':'^(2)';target.setRangeText(token,start,end,'end');
  const offset=button.dataset.script==='sub'?1:2;target.setSelectionRange(start+offset,start+offset+1);target.dispatchEvent(new Event('input',{bubbles:true}));target.focus();
@@ -287,7 +352,7 @@ $('surfaceBoundsForm').onsubmit=e=>{e.preventDefault();const next=['surfaceXmin'
 let calculusRevision=0,calculusSourceSlice=null;
 for(const [value,info] of Object.entries(CalculusEditor.operations)){const opt=document.createElement('option');opt.value=value;opt.textContent=info.label;$('calculusOperation').append(opt);}
 function calculusArguments(){return GreekInput.normalize($('calculusArguments').value).split(',').map(s=>s.trim());}
-function calculusDraft(){return CalculusEditor.draft({args:calculusArguments(),variable:$('calculusVariable').value,variables:[...$('calculusVariables').querySelectorAll('input:checked')].map(e=>e.value),operation:$('calculusOperation').value,expression:GreekInput.normalize($('calculusExpression').value.trim()),lower:$('calculusLower').value.trim(),upper:$('calculusUpper').value.trim(),name:GreekInput.normalize($('calculusName').value.trim()),resultMode:$('calculusResultMode').value,point:GreekInput.normalize($('calculusPoint').value.trim()),direction:GreekInput.normalize($('calculusDirection').value.trim()),step:$('calculusStep').value.trim(),absTol:$('calculusAbsTol').value.trim(),relTol:$('calculusRelTol').value.trim()});}
+function calculusDraft(){return CalculusEditor.draft({args:calculusArguments(),variable:$('calculusVariable').value,variables:[...$('calculusVariables').querySelectorAll('input:checked')].map(e=>e.value),operation:$('calculusOperation').value,expression:GreekInput.normalize($('calculusExpression').value.trim()),lower:$('calculusLower').value.trim(),upper:$('calculusUpper').value.trim(),name:GreekInput.normalize($('calculusName').value.trim()),resultMode:$('calculusResultMode').value,point:GreekInput.normalize($('calculusPoint').value.trim()),direction:GreekInput.normalize($('calculusDirection').value.trim()),step:$('calculusStep').value.trim(),absTol:$('calculusAbsTol').value.trim(),relTol:$('calculusRelTol').value.trim(),integrationBounds:[...$('calculusBoundRows').children].map(row=>({variable:row.dataset.variable,lower:GreekInput.normalize(row.querySelector('[data-bound=lower]').value),upper:GreekInput.normalize(row.querySelector('[data-bound=upper]').value)}))});}
 function updateCalculusPreview(){
  calculusRevision++;$('calculusComputed').hidden=true;
  const args=calculusArguments(),old=$('calculusVariable').value;$('calculusVariable').replaceChildren();
@@ -296,14 +361,16 @@ function updateCalculusPreview(){
  if(list.dataset.arguments!==key){const prior=new Map([...list.querySelectorAll('input')].map(el=>[el.value,el.checked]));list.replaceChildren();for(const arg of args.filter(Boolean)){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=arg;input.checked=prior.get(arg)??true;input.onchange=updateCalculusPreview;label.append(input,document.createTextNode(arg));list.append(label);}list.dataset.arguments=key;}
  const op=$('calculusOperation').value,spec=CalculusEditor.operations[op];
  $('calculusOperationHelp').textContent=spec.help;$('calculusVariableLabel').hidden=!!spec.multi;$('calculusVariablesLabel').hidden=!spec.multi;$('calculusDirectionLabel').hidden=op!=='directional';
- $('calculusLowerLabel').hidden=!(spec.integral||spec.primitive);$('calculusUpperLabel').hidden=op!=='definite';$('calculusStepLabel').hidden=!!(spec.integral||spec.primitive);$('calculusAbsTolLabel').hidden=$('calculusRelTolLabel').hidden=!spec.integral;
+ $('calculusMultipleBounds').hidden=!spec.multiple;
+ if(spec.multiple){const selected=[...list.querySelectorAll('input:checked')].map(el=>el.value),container=$('calculusBoundRows'),old=new Map([...container.children].map(row=>[row.dataset.variable,{lower:row.querySelector('[data-bound=lower]').value,upper:row.querySelector('[data-bound=upper]').value}]));container.replaceChildren();for(const variable of selected){const row=document.createElement('div');row.className='function-fields';row.dataset.variable=variable;for(const bound of ['lower','upper']){const label=document.createElement('label'),input=document.createElement('input');label.textContent=`${variable}: ${bound} bound`;input.dataset.bound=bound;input.value=old.get(variable)?.[bound]??(bound==='lower'?'0':'1');input.maxLength=100;input.oninput=()=>{calculusRevision++;$('calculusComputed').hidden=true;try{const draft=calculusDraft();renderMath($('calculusPreview'),draft.text);$('calculusError').textContent='';}catch(error){$('calculusError').textContent=error.message;}};label.append(input);row.append(label);}container.append(row);}}
+ $('calculusLowerLabel').hidden=spec.multiple||!(spec.integral||spec.primitive);$('calculusUpperLabel').hidden=op!=='definite';$('calculusStepLabel').hidden=!!(spec.integral||spec.primitive);$('calculusAbsTolLabel').hidden=$('calculusRelTolLabel').hidden=!spec.integral;
  $('calculusPointHelp').textContent='Point coordinates follow: '+args.join(', ')+'. Use Evaluate at point to inspect the result before adding it.';
  $('calculusError').textContent='';
  try{const draft=calculusDraft();$('calculusNameLabel').hidden=$('calculusResultMode').value==='point'||!draft.remaining.length;renderMath($('calculusPreview'),draft.text);}catch(error){$('calculusPreview').replaceChildren();$('calculusError').textContent=error.message;}
 }
 function openCalculus(index=null){
  const info=index===null?null:results[index]?.function,params=info?.parameters||['x'];calculusSourceSlice=index===null?null:results[index]?.plot_slice;
- $('calculusArguments').value=params.join(', ');$('calculusExpression').value=info?`${info.name}(${params.join(', ')})`:'sin(x)';$('calculusOperation').value='first';$('calculusLower').value='0';$('calculusUpper').value='1';$('calculusResultMode').value='function';$('calculusPoint').value=params.map(p=>calculusSourceSlice?.fixed[p]??0).join(', ');$('calculusDirection').value=params.map((_,i)=>i===0?1:0).join(', ');$('calculusStep').value='';$('calculusAbsTol').value='1e-8';$('calculusRelTol').value='1e-7';$('calculusVariables').replaceChildren();delete $('calculusVariables').dataset.arguments;
+ $('calculusArguments').value=params.join(', ');$('calculusExpression').value=info?`${info.name}(${params.join(', ')})`:'sin(x)';$('calculusOperation').value='first';$('calculusLower').value='0';$('calculusUpper').value='1';$('calculusResultMode').value='function';$('calculusPoint').value=params.map(p=>calculusSourceSlice?.fixed[p]??0).join(', ');$('calculusDirection').value=params.map((_,i)=>i===0?1:0).join(', ');$('calculusStep').value='';$('calculusAbsTol').value='1e-8';$('calculusRelTol').value='1e-7';$('calculusVariables').replaceChildren();$('calculusBoundRows').replaceChildren();delete $('calculusVariables').dataset.arguments;
  let name='result_1',n=1;while(results.some(r=>r.function?.name===name||r.name===name))name='result_'+(++n);$('calculusName').value=name;
  updateCalculusPreview();$('calculusDialog').showModal();$('calculusExpression').focus();
 }
@@ -318,7 +385,7 @@ function calculusSlice(draft){
 async function calculateDraft(text,slice=null){
  if(text.length>1200)throw Error('Result exceeds 1200 characters.');
  if(rows.length>=40)throw Error('Maximum 40 expressions; remove a row before calculating a new result.');
- const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets,expressions:[...rows.map(r=>({text:r.text,plot_slice:r.plotSlice})),{text,plot_slice:slice}],bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not calculate.');const result=data.results.at(-1);if(result.error)throw Error(result.error);return result;
+ const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets,expressions:[...rows.map(r=>({type:r.type??'expression',text:r.text,plot_slice:r.plotSlice})),{text,plot_slice:slice}],indices:[rows.length],bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not calculate.');const result=data.results.at(-1);if(result.error)throw Error(result.error);return result;
 }
 $('calculusPreviewBtn').onclick=async()=>{
  const button=$('calculusPreviewBtn'),revision=calculusRevision;button.disabled=true;
@@ -353,7 +420,7 @@ function moveRow(id,destination){
  const [row]=rows.splice(source,1);rows.splice(destination,0,row);
  renderRows();renderResults();schedule(0);
  const handle=document.querySelector(`.expression[data-id="${id}"] .drag-handle`);handle?.focus({preventScroll:true});handle?.scrollIntoView({block:'nearest'});
- $('reorderAnnouncement').textContent=`Equation moved to position ${destination+1} of ${rows.length}.`;
+ $('reorderAnnouncement').textContent=`Cell moved to position ${destination+1} of ${rows.length}.`;
 }
 function beginRowDrag(event,id,handle){
  if(event.button!==0||!event.isPrimary||rows.length<2)return;
@@ -422,7 +489,7 @@ $('qubitForm').onsubmit=async e=>{
  e.preventDefault();const expressions=qubitDraft();if(rows.length+expressions.length>40){$('qubitError').textContent='This would exceed 40 worksheet rows.';return;}
  const button=e.submitter||$('qubitForm').querySelector('button[type=submit]');button.disabled=true;
  try{
-  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets,expressions:[...rows.map(r=>({text:r.text})),...expressions.map(text=>({text}))],bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not create state.');const added=data.results.slice(-expressions.length);const error=added.find(r=>r.error);if(error)throw Error(error.error);if(added.at(-1).quantum?.qubits!==1)throw Error('Enter a valid one-qubit state.');
+  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets,expressions:[...rows.map(r=>({type:r.type??'expression',text:r.text})),...expressions.map(text=>({text}))],indices:expressions.map((_,i)=>rows.length+i),bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not create state.');const added=data.results;const error=added.find(r=>r.error);if(error)throw Error(error.error);if(added.at(-1).quantum?.qubits!==1)throw Error('Enter a valid one-qubit state.');
   const fresh=expressions.map((text,i)=>newRow(text,rows.length+i));if(fresh.length===3){fresh[0].min=0;fresh[0].max=Math.PI;fresh[1].min=0;fresh[1].max=2*Math.PI;}rows.push(...fresh);selectedMatrix=rows.at(-1).id;view='quantum';$('qubitDialog').close();renderRows();schedule(0);
  }catch(error){$('qubitError').textContent=error.message;}finally{button.disabled=false;}
 };
@@ -474,7 +541,7 @@ function renderSliceControls(box,row,result){
 }
 // Convert before field-specific input handlers run; defer words still being typed.
 (() => {
- const selector='#waveletSource, #waveletTime, #waveletOutputName, #probabilityParameters input, #probabilityName, #probabilitySource, #probabilityArg, #probabilityArg2, #graphFields textarea, #graphParameter, .expression textarea, #matrixGrid input, #matrixName, #functionName, #functionArgs, #functionBody, #functionCalcVariable, #functionIntegralLower, #functionIntegralUpper, #linearMatrix, #linearRhs, #calculusArguments, #calculusExpression, #calculusLower, #calculusUpper, #calculusName, #calculusPoint, #calculusDirection, #calculusStep, #calculusAbsTol, #calculusRelTol, #qubitAlpha, #qubitBeta, #qubitName';
+ const selector='#waveletSource, #waveletTime, #waveletOutputName, #probabilityParameters input, #probabilityName, #probabilitySource, #probabilityArg, #probabilityArg2, #graphFields textarea, #graphParameter, .expression:not(.note-cell) textarea, #matrixGrid input, #matrixName, #functionName, #functionArgs, #functionBody, #functionCalcVariable, #functionIntegralLower, #functionIntegralUpper, #linearMatrix, #linearRhs, #calculusArguments, #calculusExpression, #calculusLower, #calculusUpper, #calculusName, #calculusPoint, #calculusDirection, #calculusStep, #calculusAbsTol, #calculusRelTol, #qubitAlpha, #qubitBeta, #qubitName';
  document.addEventListener('input',e=>{if(e.target.matches(selector)&&!e.isComposing)GreekInput.apply(e.target,e.inputType==='insertFromPaste');},true);
  const finish=e=>{if(e.target.matches(selector)&&GreekInput.apply(e.target,true))e.target.dispatchEvent(new Event('input',{bubbles:true}));};
  document.addEventListener('focusout',finish);document.addEventListener('compositionend',finish);
@@ -523,7 +590,7 @@ $('datasetPreviewBtn').onclick=previewDataset;
 $('datasetForm').onsubmit=async e=>{
  e.preventDefault();if(!datasetDraft)return;const button=$('datasetAddBtn'),revision=datasetRevision;button.disabled=true;
  try{const selected=datasetSelections(),names=new Map(selected.map(c=>[String(c.index),c.name]));const item={id:uid(),name:$('datasetName').value,columns:selected.map(c=>({name:c.name,label:datasetDraft.columns[c.index].label,values:datasetDraft.columns[c.index].values})),x:$('datasetX').value===''?null:names.get($('datasetX').value),y:[...$('datasetY').querySelectorAll('input:checked')].map(el=>names.get(el.value)),style:$('datasetStyle').value,visible:true};
- const proposed=DatasetTools.validate([...datasets,item]);const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets:proposed,expressions:rows.map(r=>({text:r.text})),bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not import dataset.');const addedBindings=proposed.at(-1).columns.map(c=>proposed.at(-1).name+'_'+c.name);const duplicate=data.results.find(r=>addedBindings.some(name=>r.error===`Name ${name} is reserved or already defined.`));if(duplicate)throw Error('A dataset column conflicts with a worksheet definition. Choose another dataset or column name.');if(revision!==datasetRevision)return;
+ const proposed=DatasetTools.validate([...datasets,item]);const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets:proposed,expressions:rows.map(r=>({type:r.type??'expression',text:r.text})),bounds})});const data=await res.json();if(!res.ok)throw Error(data.error||'Could not import dataset.');const addedBindings=proposed.at(-1).columns.map(c=>proposed.at(-1).name+'_'+c.name);const duplicate=data.results.find(r=>addedBindings.some(name=>r.error===`Name ${name} is reserved or already defined.`));if(duplicate)throw Error('A dataset column conflicts with a worksheet definition. Choose another dataset or column name.');if(revision!==datasetRevision)return;
  datasets=proposed;view='graph';try{bounds=DatasetTools.fit([datasets.at(-1)]);}catch(error){toast(error.message);}renderDatasets();$('datasetsPanel').open=true;$('datasetDialog').close();schedule(0);
  }catch(error){if(revision===datasetRevision)$('datasetImportError').textContent=error.message;}finally{button.disabled=!datasetDraft;}
 };
@@ -531,7 +598,8 @@ $('datasetForm').onsubmit=async e=>{
 $('datasetForm').addEventListener('input',e=>{if(e.target.matches('#datasetName, #datasetColumns input, #datasetX, #datasetY input, #datasetStyle')){datasetRevision++;$('datasetImportError').textContent='';}});
 
 document.querySelectorAll('[data-calculus-insert]').forEach(button=>button.onclick=()=>{
- let target=symbolTarget;if(!target?.matches('.expression textarea, #functionBody, #calculusExpression')){if(!rows.length)addExpression();target=$('expressions').querySelector('textarea');}
+ let target=symbolTarget;if(!target?.matches('.expression:not(.note-cell) textarea, #functionBody, #calculusExpression')){target=firstEquationInput();}
+ if(!target)return;
  const start=target.selectionStart??target.value.length,end=target.selectionEnd??start,selected=target.value.slice(start,end);
  const text=button.dataset.calculusInsert==='derivative'?`d/dx(${selected||'f(x)'})`:`∫_{0}^{x} (${selected||'f(t)'}) dt`;
  target.setRangeText(text,start,end,'end');target.dispatchEvent(new Event('input',{bubbles:true}));target.focus();
@@ -579,7 +647,7 @@ function renderLinear(){
 }
 async function analyzeLinear(){
  const revision=linearRevision,button=$('linearAnalyzeBtn'),expression=GreekInput.normalize($('linearMatrix').value.trim()),rhs=GreekInput.normalize($('linearRhs').value.trim());button.disabled=true;
- try{const res=await fetch('/api/linear-algebra',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({matrix:expression,rhs,expressions:rows.map(r=>({text:r.text})),datasets})});const data=await res.json();if(revision!==linearRevision)return;if(!res.ok)throw Error(data.error||'Could not analyze matrix.');linearReport={analysis:data.analysis,expression,rhs};$('linearError').textContent='';renderLinear();}catch(error){if(revision===linearRevision)$('linearError').textContent=error.message;}finally{button.disabled=false;}
+ try{const res=await fetch('/api/linear-algebra',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({matrix:expression,rhs,expressions:rows.map(r=>({type:r.type??'expression',text:r.text})),datasets})});const data=await res.json();if(revision!==linearRevision)return;if(!res.ok)throw Error(data.error||'Could not analyze matrix.');linearReport={analysis:data.analysis,expression,rhs};$('linearError').textContent='';renderLinear();}catch(error){if(revision===linearRevision)$('linearError').textContent=error.message;}finally{button.disabled=false;}
 }
 $('linearBtn').onclick=()=>openLinearAlgebra();$('linearAnalyzeBtn').onclick=analyzeLinear;$('linearOperation').onchange=renderLinear;
 $('linearMatrix').oninput=$('linearRhs').oninput=invalidateLinear;
@@ -593,14 +661,15 @@ function renderGraphs(){
  for(const g of graphs){
   const card=document.createElement('article');card.className='saved-graph';card.style.setProperty('--graph-color',g.color);
   const top=document.createElement('div');top.className='saved-graph-actions';
-  const visible=document.createElement('input');visible.type='checkbox';visible.checked=g.visible;visible.setAttribute('aria-label',`Show ${g.name}`);visible.onchange=()=>{g.visible=visible.checked;renderGraphs();drawPlot();schedule(0);};
-  const name=document.createElement('button');name.className='saved-graph-name';name.textContent=g.name;name.title='Display this graph';name.onclick=()=>{graphSelection=g.id;selectView('created');renderGraphs();};
+  const visible=document.createElement('input');visible.type='checkbox';visible.checked=g.visible;visible.setAttribute('aria-label',`Show ${g.name}`);visible.onchange=()=>{g.visible=visible.checked;renderGraphs();saveLocal();drawPlot();if(g.visible)schedule(0);};
+  const name=document.createElement('button');name.className='saved-graph-name';name.textContent=g.name;name.title='Display this graph';name.onclick=()=>{graphSelection=g.id;view='created';renderGraphs();saveLocal();drawPlot();};
   const edit=document.createElement('button');edit.textContent='Edit';edit.onclick=()=>openGraph(g.id);
   const remove=document.createElement('button');remove.textContent='×';remove.setAttribute('aria-label',`Delete graph ${g.name}`);remove.onclick=()=>{graphs=graphs.filter(v=>v.id!==g.id);graphResults=graphResults.filter(v=>v.id!==g.id);renderGraphs();schedule(0);};const rename=document.createElement('button');rename.textContent='Rename';rename.onclick=()=>openGraphRename(g.id);top.append(visible,name,rename,edit,remove);card.append(top);
   const detail=document.createElement('p');detail.className='muted';detail.textContent=GraphTools.types[g.type].label;card.append(detail);
   const r=graphResults.find(r=>r.id===g.id);
   if(r?.error){const error=document.createElement('p');error.className='error';error.textContent=r.error;card.append(error);}
   else if(r&&(r.gaps||r.omitted)){const note=document.createElement('p');note.className='muted';note.textContent=`${r.gaps||r.omitted} undefined or missing ${r.gaps?'samples':'observations'} omitted.`;card.append(note);}
+  if(!r?.error&&r?.sampling?.notice){const note=document.createElement('p');note.className='muted';note.textContent=r.sampling.notice;card.append(note);}
   list.append(card);
  }
 }
@@ -644,7 +713,7 @@ $('graphSelection').onchange=e=>{graphSelection=e.target.value;saveLocal();drawP
 $('graphForm').onsubmit=async e=>{
  e.preventDefault();const revision=graphRevision,worksheetRevision=requestId,button=$('graphApplyBtn');button.disabled=true;
  try{
-  const g=graphDraft();const res=await fetch('/api/graphs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({graphs:[{...g,visible:true}],expressions:rows.map(r=>({text:r.text})),datasets})});const data=await res.json();
+  const g=graphDraft();const res=await fetch('/api/graphs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({graphs:[{...g,visible:true}],expressions:rows.map(r=>({type:r.type??'expression',text:r.text})),datasets})});const data=await res.json();
   if(revision!==graphRevision)return;
   if(worksheetRevision!==requestId)throw Error('The worksheet changed during validation. Apply the graph again to use the latest definitions.');
   if(!res.ok)throw Error(data.error||'Could not create graph.');if(data.results[0].error)throw Error(data.results[0].error);
@@ -682,7 +751,7 @@ function probabilityQueryFields(){const op=$('probabilityOperation').value;$('pr
 function probabilityPayload(){
  const source=GreekInput.normalize($('probabilitySource').value.trim()),lo=$('probabilityMin').value,hi=$('probabilityMax').value;
  if((lo==='')!==(hi===''))throw Error('Enter both plot bounds or leave both blank.');
- return {distribution:source,expressions:rows.map(r=>({text:r.text})),datasets,...(lo!==''?{range:[Number(lo),Number(hi)]}:{})};
+ return {distribution:source,expressions:rows.map(r=>({type:r.type??'expression',text:r.text})),datasets,...(lo!==''?{range:[Number(lo),Number(hi)]}:{})};
 }
 async function analyzeProbability(){
  const revision=probabilityRevision,worksheetRevision=requestId,button=$('probabilityAnalyze');button.disabled=true;
@@ -710,9 +779,9 @@ $('probabilityApply').onclick=async()=>{
  try{
   const text=GreekInput.normalize($('probabilityName').value.trim())+' = '+GreekInput.normalize($('probabilitySource').value.trim());
   const index=probabilityEdit===null?rows.length:rows.findIndex(r=>r.id===probabilityEdit);if(index<0)throw Error('The source row was removed.');if(index===rows.length&&rows.length>=40)throw Error('Maximum 40 expressions.');
-  const candidate=rows.map(r=>({text:r.text}));candidate[index]={text};
-  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expressions:candidate,datasets,bounds})});const data=await res.json();
-  if(revision!==probabilityRevision)return;if(worksheetRevision!==requestId)throw Error('The worksheet changed. Apply the definition again.');if(!res.ok)throw Error(data.error||'Could not add distribution.');const result=data.results[index];if(result.error||result.kind!=='distribution')throw Error(result.error||'Enter a valid named distribution.');
+  const candidate=rows.map(r=>({type:r.type??'expression',text:r.text}));candidate[index]={text};
+  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expressions:candidate,datasets,bounds,indices:[index]})});const data=await res.json();
+  if(revision!==probabilityRevision)return;if(worksheetRevision!==requestId)throw Error('The worksheet changed. Apply the definition again.');if(!res.ok)throw Error(data.error||'Could not add distribution.');const result=data.results[0];if(result.error||result.kind!=='distribution')throw Error(result.error||'Enter a valid named distribution.');
   if(index===rows.length)rows.push(newRow(text));else rows[index].text=text;$('probabilityDialog').close();renderRows();schedule(0);
  }catch(error){if(revision===probabilityRevision)$('probabilityError').textContent=error.message;}finally{button.disabled=false;}
 };
@@ -771,7 +840,7 @@ $('waveletAnalyze').onclick=async()=>{
  const revision=waveletRevision,context=requestId,button=$('waveletAnalyze');button.disabled=true;
  try{
   const settings=readWaveletSettings(),paste=$('waveletPaste').value.trim(),signal=paste?WaveletTools.parseValues(paste):settings.source;if(!signal.length)throw Error('Choose a signal column, enter an expression, or paste samples.');
-  const res=await fetch('/api/wavelets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal,time:settings.time||null,options:settings,expressions:rows.map(r=>({text:r.text})),datasets})});const data=await res.json();
+  const res=await fetch('/api/wavelets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal,time:settings.time||null,options:settings,expressions:rows.map(r=>({type:r.type??'expression',text:r.text})),datasets})});const data=await res.json();
   if(revision!==waveletRevision)return;if(context!==requestId)throw Error('The worksheet changed during analysis. Analyze again to use the current signal.');if(!res.ok)throw Error(data.error||'Could not analyze this signal.');
   waveletSettings=settings;saveLocal();waveletReport={analysis:data.analysis,settings,source:paste?waveletInputLabel:settings.source};waveletContextId=context;await renderWaveletAnalysis();
  }catch(error){if(revision===waveletRevision)$('waveletError').textContent=error.message;}finally{button.disabled=false;}
@@ -785,7 +854,7 @@ $('waveletSaveDataset').onclick=async()=>{
  const revision=waveletRevision,button=$('waveletSaveDataset');button.disabled=true;
  try{
   const report=currentWaveletReport(),context=requestId,name=DatasetTools.name($('waveletOutputName').value.trim()),item=WaveletTools.dataset(report.analysis,$('waveletOutput').value,name,uid()),proposed=DatasetTools.validate([...datasets,item]);
-  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets:proposed,expressions:rows.map(r=>({text:r.text})),bounds})});const data=await res.json();
+  const res=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasets:proposed,expressions:rows.map(r=>({type:r.type??'expression',text:r.text})),bounds})});const data=await res.json();
   if(revision!==waveletRevision)return;if(context!==requestId)throw Error('The worksheet changed. Analyze again before adding results.');if(!res.ok)throw Error(data.error||'Could not add output dataset.');
   const bindings=item.columns.map(c=>name+'_'+c.name);if(data.results.some(r=>bindings.some(binding=>r.error===`Name ${binding} is reserved or already defined.`)))throw Error('Output name conflicts with a worksheet definition. Choose another dataset name.');
   datasets=proposed;renderDatasets();view='graph';try{bounds=DatasetTools.fit([item]);}catch{}$('waveletDialog').close();schedule(0);toast('Wavelet output added as a dataset. Save worksheet to keep it.');
@@ -793,15 +862,16 @@ $('waveletSaveDataset').onclick=async()=>{
 };
 
 let residentTarget=null;
-const residentEditor='.expression textarea, #functionBody, #calculusExpression, #matrixGrid input, #graphFields textarea, #waveletSource, #probabilitySource';
+const residentEditor='.expression:not(.note-cell) textarea, #functionBody, #calculusExpression, #matrixGrid input, #graphFields textarea, #waveletSource, #probabilitySource';
 document.addEventListener('focusin',e=>{if(e.target.matches(residentEditor))residentTarget=e.target;});
 function openResident(){
  for(const [dialog,field] of [['functionDialog','functionBody'],['calculusDialog','calculusExpression'],['waveletDialog','waveletSource']])if($(dialog).open&&(!residentTarget?.isConnected||!$(dialog).contains(residentTarget)))residentTarget=$(field);
- if(!residentTarget?.isConnected){if(!rows.length)addExpression();residentTarget=$('expressions').querySelector('textarea');}
+ if(!residentTarget?.isConnected){residentTarget=firstEquationInput();}
  $('residentSearch').value='';renderResident();$('residentDialog').showModal();$('residentSearch').focus();
 }
 function insertResident(entry){
  const target=residentTarget;if(!target?.isConnected){toast('Select an equation or formula field first.');return;}
+ if(!target)return;
  const start=target.selectionStart??target.value.length,end=target.selectionEnd??start,draft=FunctionCatalog.insertion(entry.template,target.value.slice(start,end));
  if(target.maxLength>0&&target.value.length-(end-start)+draft.text.length>target.maxLength){toast('This formula would exceed the field length limit.');return;}
  target.setRangeText(draft.text,start,end,'end');target.setSelectionRange(start+draft.start,start+draft.end);GreekInput.apply(target,true);target.dispatchEvent(new Event('input',{bubbles:true}));const selection=[target.selectionStart,target.selectionEnd];$('residentDialog').close();target.focus();target.setSelectionRange(...selection);
