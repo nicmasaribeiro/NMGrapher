@@ -1,6 +1,42 @@
 'use strict';
 (() => {
  const groups={
+ 'Vector fields':[
+ ['Field definition','F(r)=[-r[1],r[0]]','Define a planar rotation field with a position-vector argument.'],
+ ['Force −∇U','force({{U}},[1,2])','Negative gradient of a scalar potential.'],
+ ['Field Jacobian','field_jacobian({{F}},[1,2])','Rows are field components, columns are spatial coordinates.'],
+ ['Field divergence','field_divergence({{F}},[1,2])','Local expansion: trace of the field Jacobian.'],
+ ['Field curl','field_curl({{F}},[1,2])','Signed scalar curl in 2D; vector curl for a 3D position.'],
+ ['Field Laplacian','field_laplacian({{F}},[1,2])','Componentwise sum of spatial second derivatives.'],
+ ['Field gradient','field_gradient({{U}},[1,2])','Gradient of a scalar spatial function.'],
+ ['Field Hessian','field_hessian({{U}},[1,2])','Second derivatives of a scalar spatial function.'],
+ ['Field directional','field_directional({{F}},[1,2],[1,0])','Direction is used as entered, without normalization.'],
+ ['Convective derivative','field_convective({{F}},[1,2])','Jacobian times field: (F·∇)F.'],
+ ['Work integral','work({{F}},r,0,2*pi)','Line integral along a defined vector path r(t).']
+ ],
+ 'Random arrays':[
+ ['Uniform vector','random_vector({{3}},42)','Repeatable uniform entries in [0,1); size 1–32.'],
+ ['Uniform matrix','random_matrix({{3}},3,42)','Rows, columns, seed.'],
+ ['Normal vector','normal_vector({{3}},42)','Independent standard normal entries.'],
+ ['Normal matrix','normal_matrix({{3}},3,42)','Independent standard normal entries.'],
+ ['Activate entries','activate({{[1,2,3]}},0.5,42)','Independently retain each entry with probability p; otherwise zero.'],
+ ['Activate object','random_gate({{[1,2,3]}},0.5,42)','One Bernoulli gate for the entire vector or matrix.'],
+ ['Stochastic matrix','stochastic_matrix({{3}},42)','Nonnegative matrix with each row summing to one.']
+ ],
+ 'Quantum / Dirac notation':[
+ ['|0⟩','|{{0}}⟩','Computational basis ket; binary labels support 1–5 qubits.'],
+ ['|ψ⟩','|{{ψ}}⟩','Named ket, or a state-valued function such as |ψ(t)⟩.'],
+ ['Define ket','|{{ψ}}⟩=(|0⟩+i|1⟩)/sqrt(2)','Define a named state with its actual amplitudes.'],
+ ['⟨ψ|','⟨{{ψ}}|','Conjugate-transpose bra of a named ket.'],
+ ['⟨φ|ψ⟩','⟨{{φ}}|ψ⟩','Inner product; conjugates the first state.'],
+ ['|ψ⟩⟨φ|','|{{ψ}}⟩⟨φ|','Outer product (dyad); conjugates the bra amplitudes.'],
+ ['⟨ψ|A|ψ⟩','⟨{{ψ}}|pauliZ()|ψ⟩','Matrix element; normalized ψ gives an expectation value.'],
+ ['|+⟩','|+⟩','( |0⟩ + |1⟩ ) / sqrt(2). Also |-⟩, |+i⟩ and |-i⟩.'],
+ ['Tensor kets','|{{0}}⟩ ⊗ |1⟩','Tensor product; adjacent kets |0⟩|1⟩ also work.'],
+ ['Bell ket','(|00⟩+|11⟩)/sqrt(2)','Normalized two-qubit Bell state.'],
+ ['ket','ket({{[1,i]}})/sqrt(2)','Convert amplitudes to a ket column without normalizing.'],
+ ['Bloch vector','bloch({{|ψ⟩}})','Bloch coordinates of a normalized one-qubit state.']
+ ],
  'Calculus':[
  ['exp','exp({{x}})','Exponential e^x.'],['ln','ln({{x}})','Natural logarithm.'],['log','log10({{x}})','Common logarithm (base 10). Inserts log10; existing log(x) remains natural log.'],['logₐ','log_{{2}}(x)','Logarithm with a positive base other than 1.'],
  ['d/dx','d/dx({{f(x)}})','Numerical derivative of an expression.'],['f′',"{{f}}'(x)",'Derivative of a defined one-argument function. Two primes give the second derivative.'],['∫','∫_{0}^{x} ({{f(t)}}) dt','Definite integral or integral-defined function.'],['∫∫','∫_{0}^{1} ∫_{0}^{y} ({{x+y}}) dxdy','Double integral; inner bounds may depend on outer variables.'],['∫∫∫','integrate({{x+y+z}}, [x,y,z], [0,0,0], [1,1,1])','Triple integral, variables in differential order.'],['∑','∑_{k=1}^{10} ({{k^2}})','Finite sum with an integer index.'],['∏','∏_{k=1}^{5} ({{k}})','Finite ordered product.'],

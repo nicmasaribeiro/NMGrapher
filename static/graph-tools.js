@@ -1,6 +1,8 @@
 'use strict';
 (() => {
  const types={
+  vectorfield:{label:'2D vector / force field',fields:{expression:'Vector expression · F([x,y]) or F(x,y)'},defaults:{expression:'[-y,x]'},grid:true,field:true},
+  vectorfield3d:{label:'3D vector / force field',fields:{expression:'Vector expression · F([x,y,z]) or F(x,y,z)'},defaults:{expression:'[-y,x,-z]'},grid:true,field:true},
   function:{label:'Cartesian curve · y = f(x)',fields:{y:'y(x)'},defaults:{y:'sin(x)'},range:[-6,6]},
   parametric:{label:'Parametric curve · (x(t), y(t))',fields:{x:'x(t)',y:'y(t)'},defaults:{x:'2*cos(t)',y:'sin(t)'},range:[0,2*Math.PI]},
   polar:{label:'Polar curve · r(θ)',fields:{r:'Radius r(θ)'},defaults:{r:'2*cos(3*θ)'},parameter:'θ',range:[0,2*Math.PI]},
@@ -14,10 +16,10 @@
   probability:{label:'Probability distribution',fields:{expression:'Distribution name or constructor'},defaults:{expression:'normal(0,1)'},range:[-4,4]},
   histogram:{label:'Histogram',fields:{values:'Values'},defaults:{values:'[1,1,2,2,2,3,4,5]'},data:true}
  };
- const is3d=g=>['surface','parametric3d'].includes(g.type);
+ const is3d=g=>['surface','parametric3d','vectorfield3d'].includes(g.type);
  function fresh(type,id,color='#2864d7'){
   const config=types[type];if(!config)throw Error('Choose a supported graph type.');
-  return {id,type,name:config.label.split(' · ')[0],color,visible:true,parameter:config.parameter||'t',range:config.range?[...config.range]:[-5,5],yrange:[-5,5],samples:400,bins:20,probability_mode:'density',x:'',y:'',z:'',r:'',expression:'',values:'',...config.defaults};
+  return {id,type,name:config.label.split(' · ')[0],color,visible:true,parameter:config.parameter||'t',range:config.range?[...config.range]:[-5,5],yrange:[-5,5],zrange:[-5,5],density:type==='vectorfield3d'?7:13,arrow_scale:0.8,normalize:false,samples:400,bins:20,probability_mode:'density',x:'',y:'',z:'',r:'',expression:'',values:'',...config.defaults};
  }
  function validate(items){
   if(!Array.isArray(items)||items.length>12)throw Error('Use at most 12 saved graphs.');
@@ -34,7 +36,7 @@
    }
    for(const key of Object.keys(types[g.type].fields))if(key!=='x'&&!out[key])throw Error('Complete the graph formula fields.');
    if(!types[g.type].data){
-    for(const key of ['range','yrange']){
+    for(const key of ['range','yrange','zrange']){
      const r=g[key]??out[key];
      if(!Array.isArray(r)||r.length!==2||r.some(v=>typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>1e6)||r[1]-r[0]<1e-6||r[1]-r[0]>1e6)throw Error('Use increasing finite ranges within ±1,000,000, with width 0.000001–1,000,000.');
      out[key]=[...r];
@@ -42,12 +44,34 @@
     if(typeof g.parameter!=='string'||g.parameter.length>40||!g.parameter.trim())throw Error('Enter a parameter name.');out.parameter=g.parameter.trim();
     if(!Number.isInteger(g.samples)||g.samples<50||g.samples>1000)throw Error('Use 50–1000 samples.');out.samples=g.samples;
    }
+   if(types[g.type].field){
+    out.density=g.density??out.density;out.arrow_scale=g.arrow_scale??0.8;out.normalize=g.normalize??false;
+    if(!Number.isInteger(out.density)||out.density<3||out.density>(g.type==='vectorfield3d'?11:25))throw Error('Field grid size must be 3–25 in 2D or 3–11 in 3D.');
+    if(typeof out.arrow_scale!=='number'||!Number.isFinite(out.arrow_scale)||out.arrow_scale<.1||out.arrow_scale>2)throw Error('Arrow scale must be 0.1–2.');
+    if(typeof out.normalize!=='boolean')throw Error('Arrow normalization must be true or false.');
+   }
    if(g.type==='histogram'){if(!Number.isInteger(g.bins)||g.bins<1||g.bins>100)throw Error('Use 1–100 histogram bins.');out.bins=g.bins;}
    if(g.probability_mode!==undefined&&!['density','cdf'].includes(g.probability_mode))throw Error('Choose density/mass or cumulative probability.');out.probability_mode=g.probability_mode??'density';
    return out;
   });
  }
  const safeText=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+ function fieldTraces(g,r,base){
+  const three=g.type==='vectorfield3d',dimensions=three?3:2;
+  const coords=Array.from({length:dimensions},()=>[]),maximum=Math.max(...r.magnitudes,0);
+  const segment=(a,b)=>{for(let k=0;k<dimensions;k++)coords[k].push(a[k],b[k],null);};
+  r.positions.forEach((p,index)=>{
+   const v=r.vectors[index],m=r.magnitudes[index];if(!m)return;
+   const length=r.spacing*(g.arrow_scale??.8)*(g.normalize?1:m/maximum),unit=v.map(x=>x/m);
+   const end=p.map((x,k)=>x+length*unit[k]);segment(p,end);
+   let perpendicular;
+   if(three){const a=Math.abs(unit[2])<.9?[0,0,1]:[0,1,0];perpendicular=[unit[1]*a[2]-unit[2]*a[1],unit[2]*a[0]-unit[0]*a[2],unit[0]*a[1]-unit[1]*a[0]];const n=Math.hypot(...perpendicular);perpendicular=perpendicular.map(x=>x/n);}
+   else perpendicular=[-unit[1],unit[0]];
+   for(const sign of [-1,1])segment(end,end.map((x,k)=>x-length*.25*unit[k]+sign*length*.12*perpendicular[k]));
+  });
+  return [{...base,type:three?'scatter3d':'scatter',mode:'lines',x:coords[0],y:coords[1],...(three?{z:coords[2]}:{}),line:{color:g.color,width:2},hoverinfo:'skip'},
+   {...base,showlegend:false,type:three?'scatter3d':'scatter',mode:'markers',x:r.positions.map(p=>p[0]),y:r.positions.map(p=>p[1]),...(three?{z:r.positions.map(p=>p[2])}:{}),marker:{color:g.color,size:3,opacity:.65},customdata:r.vectors.map((v,k)=>[...v,r.magnitudes[k]]),hovertemplate:'x: %{x:.5g}<br>y: %{y:.5g}'+(three?'<br>z: %{z:.5g}':'')+'<br>Fₓ: %{customdata[0]:.5g}<br>Fᵧ: %{customdata[1]:.5g}'+(three?'<br>F𝓏: %{customdata[2]:.5g}':'')+`<br>|F|: %{customdata[${dimensions}]:.5g}<extra>%{fullData.name}</extra>`}];
+ }
  function plot(graphs,results,selection='2d'){
   const three=selection==='3d'||is3d(graphs.find(g=>g.id===selection)||{});
   const group=selection==='2d'||selection==='3d';
@@ -57,7 +81,8 @@
    const r=results.find(r=>r.id===g.id);if(!r||r.error||r.hidden)continue;
    const base={name:safeText(g.name),showlegend:true,connectgaps:false};
    const line={color:g.color,width:2.5},marker={color:g.color,size:6};
-   if(g.type==='probability'){
+   if(types[g.type].field){traces.push(...fieldTraces(g,r,base));
+   }else if(g.type==='probability'){
     traces.push({...base,type:r.discrete&&g.probability_mode!=='cdf'?'bar':'scatter',mode:'lines',x:r.x,y:r.y,marker,line:{...line,...(r.discrete&&g.probability_mode==='cdf'?{shape:'hv'}:{})}});
    }else if(['function','parametric','polar','line','scatter','parametric3d'].includes(g.type)){
     traces.push({...base,type:three?'scatter3d':'scatter',mode:g.type==='scatter'?'markers':g.type==='line'?'lines+markers':'lines',x:r.x,y:r.y,...(three?{z:r.z}:{}),line,marker,...(r.parameter?{customdata:r.parameter,hovertemplate:'parameter: %{customdata:.5g}<br>x: %{x:.5g}<br>y: %{y:.5g}'+(three?'<br>z: %{z:.5g}':'')+'<extra>%{fullData.name}</extra>'}:{})});
@@ -73,7 +98,7 @@
   if(!group&&selected.length){layout.title={text:safeText(selected[0].name)};layout.margin.t=50;}
   if(three)layout.scene={xaxis:{title:{text:'x'}},yaxis:{title:{text:'y'}},zaxis:{title:{text:'z'}},aspectmode:'data'};
   else {layout.xaxis={title:{text:'x'},autorange:true,zeroline:true};layout.yaxis={title:{text:'y'},autorange:true,zeroline:true};
-   if(selected.length&&selected.every(g=>['polar','parametric','implicit'].includes(g.type)))Object.assign(layout.yaxis,{scaleanchor:'x',scaleratio:1});
+   if(selected.length&&selected.every(g=>['polar','parametric','implicit','vectorfield'].includes(g.type)))Object.assign(layout.yaxis,{scaleanchor:'x',scaleratio:1});
    if(selected.length===1&&selected[0].type==='histogram'){layout.xaxis.title.text='Value';layout.yaxis.title.text='Count';}
   }
   return {data:traces,layout};

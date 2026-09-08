@@ -2,6 +2,8 @@
 const $ = id => document.getElementById(id);
 const colors = ['#2864d7','#dd6b35','#8a4dc2','#169582','#cf4166','#a57b17'];
 const examples = {
+ vector_fields:['F(r)=[-r[1],r[0]]','field_divergence(F,[1,2])','field_curl(F,[1,2])','field_jacobian(F,[1,2])','U(r)=(r[0]^2+r[1]^2)/2','G(r)=force(U,r)','r(t)=[cos(t),sin(t)]','work(F,r,0,2*pi)','work(G,r,0,2*pi)'],
+ dirac:['|ψ⟩=(|0⟩+i|1⟩)/sqrt(2)','⟨ψ|ψ⟩','⟨ψ|pauliY()|ψ⟩','ρ=|ψ⟩⟨ψ|','|Φ⟩=(|00⟩+|11⟩)/sqrt(2)','probabilities(|Φ⟩)','|u(t)⟩=cos(t/2)|0⟩+sin(t/2)|1⟩','E(t)=⟨u(t)|pauliZ()|u(t)⟩'],
  desmos_demo:["f_0(x)=(1-x^2)*exp(-x^2/2)", "f_1(x)=(1-(x^3-3x^2*(1-x))^2)*exp(-(x^3-3x^2*(1-x))^2/2)", "F(x,y)=f_0(x)*f_1(y)", "g(θ,φ)=∫_{0}^{θ} ∫_{0}^{φ} F(x,y) dydx", "d_x(x,y)=d/dx F(x,y)", "N(x)=normaldist(0,1).pdf(x)", "i_0(t)=∫_{0}^{t} N(x) log10(N(x)/f_0(x)) dx", "i_1(t)=∫_{0}^{t} N(x) log10(N(x)/f_1(x)) dx", "p_t(t,N)=∏_{n=1}^{N} f_0(t)", "d/dx ∑_{n=1}^{3} f_0(x)", "c_0(t)=∫_{0}^{t} ∫_{0}^{t} p_t(x,y) dxdy", "c_0(1)"],
  probability:['D=normal(0,1)','pdf(D,x)','cdf(D,x)','N=poisson(4)','pmf(N,2)','B=binomial(10,0.5)','prob(B,3,7)','Q=boltzmann([0,1,2],1)','probabilities(Q)','expected_energy(Q)'],
  linear_algebra:['A = [[2,1],[1,3]]','λ = eigvals(A)','V = eigvecs(A)','A@V - V@diag(λ)','B = [[1,2,3],[2,4,6]]','nullspace(B)','svdU(B) @ svdS(B) @ svdVh(B)'],
@@ -36,7 +38,7 @@ const deferredResults=new Set();
 let dirtyGraphs=false;
 let symbolTarget=null;
 let dragState=null,dragFrame=0;
-document.addEventListener('focusin',e=>{if(e.target.matches('.expression:not(.note-cell) textarea, #matrixGrid input, #matrixName, #functionForm input, #functionBody, #calculusExpression, #calculusForm input:not([type=checkbox]), #qubitAlpha, #qubitBeta, #qubitName'))symbolTarget=e.target;});
+document.addEventListener('focusin',e=>{if(e.target.matches('.expression:not(.note-cell):not(.python-cell) textarea, #matrixGrid input, #matrixName, #functionForm input, #functionBody, #fieldBody, #fieldPoint, #fieldDirection, #calculusExpression, #calculusForm input:not([type=checkbox]), #qubitAlpha, #qubitBeta, #qubitName'))symbolTarget=e.target;});
 const uid=()=>Math.random().toString(36).slice(2,11);
 const newRow=(text='',i=rows.length)=>({id:uid(),type:'expression',text:GreekInput.normalize(text),color:colors[i%colors.length],plotName:'',visible:true,min:-5,max:5,plotComponent:'all',plotSlice:null});
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3500);}
@@ -63,18 +65,18 @@ function reloadSystem(){
 $('reloadBtn').onclick=reloadSystem;
 function validateWorksheet(data){
  if(!data || !Array.isArray(data.rows) || data.rows.length>40)throw Error('The file must contain at most 40 expression rows.');
- return data.rows.map((r,i)=>{if(!r || typeof r.text!=='string' || r.text.length>1200)throw Error('Invalid expression in worksheet.');if(r.plotName!==undefined&&(typeof r.plotName!=='string'||r.plotName.length>80))throw Error('Plot names support at most 80 characters.');if(r.type!==undefined&&!['expression','note'].includes(r.type))throw Error('Unknown worksheet cell type.');return {...newRow(r.type==='note'?'':r.text,i),...(r.type==='note'?{type:'note',text:r.text}:{}),plotName:r.plotName?.trim()||'',...(typeof r.color==='string'&&/^#[0-9a-f]{6}$/i.test(r.color)?{color:r.color}:{}),plotSlice:validPlotSlice(r.plotSlice)?r.plotSlice:null,plotComponent:Number.isInteger(r.plotComponent)&&r.plotComponent>=0&&r.plotComponent<1024?r.plotComponent:'all',visible:r.visible!==false,min:Number.isFinite(r.min)?r.min:-5,max:Number.isFinite(r.max)?r.max:5};});
+ return data.rows.map((r,i)=>{if(!r || typeof r.text!=='string' || r.text.length>1200)throw Error('Invalid expression in worksheet.');if(r.plotName!==undefined&&(typeof r.plotName!=='string'||r.plotName.length>80))throw Error('Plot names support at most 80 characters.');if(r.type!==undefined&&!['expression','note','python'].includes(r.type))throw Error('Unknown worksheet cell type.');return {...newRow(r.type==='note'?'':r.text,i),...(['note','python'].includes(r.type)?{type:r.type,text:r.text}:{}),plotName:r.plotName?.trim()||'',...(typeof r.color==='string'&&/^#[0-9a-f]{6}$/i.test(r.color)?{color:r.color}:{}),plotSlice:validPlotSlice(r.plotSlice)?r.plotSlice:null,plotComponent:Number.isInteger(r.plotComponent)&&r.plotComponent>=0&&r.plotComponent<1024?r.plotComponent:'all',visible:r.visible!==false,min:Number.isFinite(r.min)?r.min:-5,max:Number.isFinite(r.max)?r.max:5};});
 }
-function loadExample(name){if(!examples[name])return;graphs=[];graphResults=[];renderGraphs();rows=examples[name].map(newRow);if(name==='qubit'){rows[0].min=0;rows[0].max=Math.PI;rows[1].min=0;rows[1].max=2*Math.PI;}if(name==='wavelet'){rows[0].min=0.1;rows[0].max=4;}if(name==='ctmc'){rows[0].min=0;rows[0].max=20;}view=['qubit','bell'].includes(name)?'quantum':name==='ctmc'||name==='hermitian'?'heatmap':['complex','greek'].includes(name)?'complex':name==='domain'?'domain':['two_vars','partials','n_vars'].includes(name)?'surface':'graph';if(view==='domain')component='phase';if(view==='surface')component='real';selectedMatrix=['ctmc','qubit'].includes(name)?rows[2].id:name==='bell'?rows[0].id:'';bounds=['complex','domain','hermitian','greek','two_vars','calculus','partials'].includes(name)?[-4,4,-3,3]:[-10,10,-7,7];if(name==='desmos_demo'){bounds=[0,0.75,0,0.75];$('parameterMin').value=0;$('parameterMax').value=0.75;}renderRows();schedule(0);}
+function loadExample(name){if(!examples[name])return;graphs=[];graphResults=[];renderGraphs();rows=examples[name].map(newRow);if(name==='qubit'){rows[0].min=0;rows[0].max=Math.PI;rows[1].min=0;rows[1].max=2*Math.PI;}if(name==='wavelet'){rows[0].min=0.1;rows[0].max=4;}if(name==='ctmc'){rows[0].min=0;rows[0].max=20;}view=['qubit','bell','dirac'].includes(name)?'quantum':name==='ctmc'||name==='hermitian'?'heatmap':['complex','greek'].includes(name)?'complex':name==='domain'?'domain':['two_vars','partials','n_vars'].includes(name)?'surface':'graph';if(view==='domain')component='phase';if(view==='surface')component='real';selectedMatrix=['ctmc','qubit'].includes(name)?rows[2].id:['bell','dirac'].includes(name)?rows[0].id:'';bounds=['complex','domain','hermitian','greek','two_vars','calculus','partials'].includes(name)?[-4,4,-3,3]:[-10,10,-7,7];if(name==='vector_fields'){const g=GraphTools.fresh('vectorfield',uid());g.name='Rotational force field';g.expression='F([x,y])';graphs=[g];graphSelection=g.id;view='created';renderGraphs();bounds=[-5,5,-5,5];}if(name==='desmos_demo'){bounds=[0,0.75,0,0.75];$('parameterMin').value=0;$('parameterMax').value=0.75;}renderRows();schedule(0);}
 function addExpression(text=''){if(rows.length>=40){toast('Maximum 40 expressions per worksheet.');return;}rows.push(newRow(text));renderRows();schedule(0);$('expressions').lastElementChild.querySelector('textarea').focus();}
 function addNote(){if(rows.length>=40){toast('Maximum 40 cells per worksheet.');return;}rows.push({...newRow(),type:'note'});renderRows();schedule(0);$('expressions').lastElementChild.querySelector('textarea').focus();}
 $('addNoteBtn').onclick=addNote;
-function firstEquationInput(){let input=$('expressions').querySelector('.expression:not(.note-cell) textarea');if(!input){addExpression();input=$('expressions').querySelector('.expression:not(.note-cell) textarea');}return input;}
+function firstEquationInput(){let input=$('expressions').querySelector('.expression:not(.note-cell):not(.python-cell) textarea');if(!input){addExpression();input=$('expressions').querySelector('.expression:not(.note-cell):not(.python-cell) textarea');}return input;}
 function renderRows(){
  const prior=new Map(resultIds.map((id,i)=>[id,results[i]]));results=rows.map(row=>{const r=prior.get(row.id);return r&&r.text===row.text.trim()?r:{kind:'empty',text:row.text.trim()};});resultIds=rows.map(row=>row.id);
  const container=$('expressions');container.replaceChildren();$('rowCount').textContent=rows.length;
  rows.forEach((row,index)=>{
-  const el=document.createElement('article');el.className='expression'+(row.type==='note'?' note-cell':'');el.dataset.id=row.id;el.style.setProperty('--row-color',row.color);
+  const el=document.createElement('article');el.className='expression'+(row.type==='note'?' note-cell':row.type==='python'?' python-cell':'');el.dataset.id=row.id;el.style.setProperty('--row-color',row.color);
   const handle=document.createElement('button');handle.type='button';handle.className='drag-handle';handle.textContent='⋮⋮';handle.title='Drag to reorder · arrow keys move';handle.setAttribute('aria-label',`Move ${row.type==='note'?'note':'equation'} ${index+1}`);handle.setAttribute('aria-describedby','reorderHelp');handle.onpointerdown=e=>beginRowDrag(e,row.id,handle);handle.onkeydown=e=>{const at=rows.findIndex(r=>r.id===row.id);let to;if(e.key==='ArrowUp')to=at-1;else if(e.key==='ArrowDown')to=at+1;else if(e.key==='Home')to=0;else if(e.key==='End')to=rows.length-1;else return;e.preventDefault();moveRow(row.id,to);};el.append(handle);
   if(row.type==='note'){
    const number=document.createElement('span');number.className='row-number';number.textContent=index+1;el.append(number);
@@ -82,6 +84,14 @@ function renderRows(){
    const remove=document.createElement('button');remove.type='button';remove.className='remove';remove.textContent='×';remove.setAttribute('aria-label',`Delete note ${index+1}`);remove.onclick=()=>{rows=rows.filter(r=>r.id!==row.id);renderRows();schedule(0);};heading.append(label,remove);el.append(heading);
    const input=document.createElement('textarea');input.className='note-input';input.value=row.text;input.rows=3;input.maxLength=1200;input.spellcheck=true;input.placeholder='Write a reminder, idea, or next step…';input.setAttribute('aria-label',`Note ${index+1}`);
    input.oninput=()=>{row.text=input.value;input.style.height='auto';input.style.height=Math.min(300,Math.max(84,input.scrollHeight))+'px';saveLocal();};el.append(input);container.append(el);input.style.height=Math.min(300,Math.max(84,input.scrollHeight))+'px';return;
+  }
+  if(row.type==='python'){
+   const heading=document.createElement('div');heading.className='note-heading';heading.textContent='Python · mathematical subset';heading.title='Assignments, def, return, if/else, and for/range up to 32 iterations. Use ** for powers. Numeric numpy/math aliases only.';
+   const remove=document.createElement('button');remove.className='remove';remove.textContent='×';remove.setAttribute('aria-label',`Delete Python cell ${index+1}`);remove.onclick=()=>{rows=rows.filter(r=>r.id!==row.id);renderRows();schedule(0);};heading.append(remove);el.append(heading);
+   const input=document.createElement('textarea');input.value=row.text;input.rows=8;input.maxLength=1200;input.spellcheck=false;input.className='python-input';input.setAttribute('aria-label',`Python code ${index+1}`);
+   input.oninput=()=>{row.text=input.value;schedule(600);};input.onkeydown=e=>{if(e.key==='Tab'){e.preventDefault();input.setRangeText('    ',input.selectionStart,input.selectionEnd,'end');input.dispatchEvent(new Event('input'));}if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();schedule(0);}};el.append(input);
+   const hint=document.createElement('p');hint.className='muted';hint.textContent='Use assignments, def, return, if/else, and for/range (≤32 iterations). Powers: **. Numeric math/numpy aliases only; no general imports or file access.';el.append(hint);
+   const result=document.createElement('div');result.className='result';el.append(result);container.append(el);return;
   }
   const toggle=document.createElement('button');toggle.className='color-toggle'+(row.visible?'':' off');toggle.title='Show or hide plot';toggle.setAttribute('aria-label',`Show expression ${index+1}`);toggle.setAttribute('aria-pressed',String(row.visible));toggle.onclick=()=>{row.visible=!row.visible;toggle.classList.toggle('off',!row.visible);toggle.setAttribute('aria-pressed',String(row.visible));saveLocal();drawPlot();};el.append(toggle);
   const n=document.createElement('span');n.className='row-number';n.textContent=index+1;el.append(n);
@@ -138,8 +148,14 @@ function renderResults(indices=null){
   if(indices&&!indices.has(i))return;
   if(row.type==='note')return;
   const el=document.querySelector(`.expression[data-id="${row.id}"]`);if(!el)return;const box=el.querySelector('.result');if(box.contains(document.activeElement)){deferredResults.add(row.id);return;}deferredResults.delete(row.id);box.replaceChildren();const r=results[i];if(!r)return;
-  box.className='result'+(r.error?' error':'');if(r.function){const b=document.createElement('button');b.textContent='Edit function';b.className='edit-function';b.onclick=()=>openFunction(i);box.append(b);const calculus=document.createElement('button');calculus.textContent='Calculus';calculus.className='edit-function';calculus.onclick=()=>openCalculus(i);box.append(calculus);if(r.kind==='surface'&&!r.error){const surface=document.createElement('button');surface.className='edit-function';surface.textContent='Surface';surface.onclick=()=>selectView('surface',row.id);box.append(surface);}}if(r.function&&r.function.parameters.length>1)renderSliceControls(box,row,r);if(r.error){const error=document.createElement('div');error.textContent=r.error;box.append(error);return;}
-  if(r.kind==='distribution_function'){const tag=document.createElement('div');tag.className='result-tag';tag.textContent='Distribution-valued function · call with parameter values, then use .pdf(x) or .cdf(x).';box.append(tag);
+  box.className='result'+(r.error?' error':'');if(r.function){const b=document.createElement('button');b.textContent='Edit function';b.className='edit-function';b.onclick=()=>openFunction(i);box.append(b);const calculus=document.createElement('button');calculus.textContent='Calculus';calculus.className='edit-function';calculus.onclick=()=>r.kind==='field_function'?openFieldSuite(i):openCalculus(i);box.append(calculus);if(r.kind==='surface'&&!r.error){const surface=document.createElement('button');surface.className='edit-function';surface.textContent='Surface';surface.onclick=()=>selectView('surface',row.id);box.append(surface);}}if(r.function&&r.function.parameters.length>1)renderSliceControls(box,row,r);if(r.error){const error=document.createElement('div');error.textContent=r.error;box.append(error);return;}
+  if(r.kind==='field_function'){
+   const tag=document.createElement('div');tag.className='result-tag';tag.textContent=`Spatial function · position-vector argument (at least ${r.input_dimensions} coordinates)`;box.append(tag);
+   const b=document.createElement('button');b.className='edit-function';b.textContent='Vector field tools';b.onclick=()=>openFieldSuite(i);box.append(b);
+  }else if(r.kind==='python'){
+   const help=document.createElement('div');help.textContent='Use exported names in expressions below. Ctrl/⌘ + Enter recalculates.';box.append(help);
+   for(const item of r.exports||[]){const b=document.createElement('button');b.className='edit-function';b.textContent=item.name+(item.parameters?'('+item.parameters.join(', ')+')':'');b.onclick=()=>addExpression(item.parameters?`${item.name}(${item.parameters.length===1?'x':item.parameters.map((_,k)=>k<2?['x','y'][k]:'0').join(', ')})`:item.name);box.append(b);}
+  }else if(r.kind==='distribution_function'){const tag=document.createElement('div');tag.className='result-tag';tag.textContent='Distribution-valued function · call with parameter values, then use .pdf(x) or .cdf(x).';box.append(tag);
   }else if(r.kind==='wavelet_transform'){
    const t=r.transform,tag=document.createElement('div');tag.className='result-tag';tag.textContent=`${t.type.toUpperCase()} · ${t.wavelet} · ${t.length} samples · ${t.labels.length} bands/scales`;box.append(tag);
    const source=r.name||r.text;for(const [label,formula] of [['Coefficients',`wavelet_coeffs(${source},0)`],...(t.type==='dwt'?[['Reconstruct',`idwt(${source})`]]:[['Power',`wavelet_power(${source},0)`],['Frequencies',`wavelet_frequencies(${source})`]])]){const b=document.createElement('button');b.className='edit-function';b.textContent=label;b.onclick=()=>addExpression(formula);box.append(b);}
@@ -166,6 +182,9 @@ function renderResults(indices=null){
   }else if(r.kind!=='empty'){const tag=document.createElement('span');tag.className='result-tag';tag.textContent=r.kind==='surface'?'Two-input slice · level curves / surface':r.kind==='complex_curve'?'Complex function · solid Re, dashed Im':r.kind==='complex_field'?'Complex input domain':r.kind==='curve'?'Function':r.kind==='implicit'?'Implicit curve':'Shaded region';box.append(tag);}
   if(['curve','complex_curve','surface','complex_field','implicit','inequality','series','data_plot'].includes(r.kind)){
    const label=document.createElement('label');label.className='plot-name-field';label.textContent='Plot name';const input=document.createElement('input');input.maxLength=80;input.value=row.plotName||'';input.placeholder='Optional name for this graph';input.setAttribute('aria-label',`Plot name for equation ${i+1}`);input.oninput=()=>{row.plotName=input.value.trim();saveLocal();};input.onchange=()=>drawPlot();label.append(input);box.append(label);
+  }
+  if(r.function&&r.components&&r.shape?.length===1&&[2,3].includes(r.shape[0])){
+   const b=document.createElement('button');b.className='edit-function';b.textContent='Vector field tools';b.onclick=()=>openFieldSuite(i);box.append(b);
   }
   if(r.components){
    const label=document.createElement('label');label.className='entry-picker';label.append(`${r.shape.length===1?'Vector '+r.shape[0]:r.shape.join(' × ')+' matrix'} output · plot entry `);
@@ -541,7 +560,7 @@ function renderSliceControls(box,row,result){
 }
 // Convert before field-specific input handlers run; defer words still being typed.
 (() => {
- const selector='#waveletSource, #waveletTime, #waveletOutputName, #probabilityParameters input, #probabilityName, #probabilitySource, #probabilityArg, #probabilityArg2, #graphFields textarea, #graphParameter, .expression:not(.note-cell) textarea, #matrixGrid input, #matrixName, #functionName, #functionArgs, #functionBody, #functionCalcVariable, #functionIntegralLower, #functionIntegralUpper, #linearMatrix, #linearRhs, #calculusArguments, #calculusExpression, #calculusLower, #calculusUpper, #calculusName, #calculusPoint, #calculusDirection, #calculusStep, #calculusAbsTol, #calculusRelTol, #qubitAlpha, #qubitBeta, #qubitName';
+ const selector='#fieldName, #fieldArgs, #fieldBody, #fieldPoint, #fieldDirection, #fieldPath, #fieldLower, #fieldUpper, #waveletSource, #waveletTime, #waveletOutputName, #probabilityParameters input, #probabilityName, #probabilitySource, #probabilityArg, #probabilityArg2, #graphFields textarea, #graphParameter, .expression:not(.note-cell):not(.python-cell) textarea, #matrixGrid input, #matrixName, #functionName, #functionArgs, #functionBody, #functionCalcVariable, #functionIntegralLower, #functionIntegralUpper, #linearMatrix, #linearRhs, #calculusArguments, #calculusExpression, #calculusLower, #calculusUpper, #calculusName, #calculusPoint, #calculusDirection, #calculusStep, #calculusAbsTol, #calculusRelTol, #qubitAlpha, #qubitBeta, #qubitName';
  document.addEventListener('input',e=>{if(e.target.matches(selector)&&!e.isComposing)GreekInput.apply(e.target,e.inputType==='insertFromPaste');},true);
  const finish=e=>{if(e.target.matches(selector)&&GreekInput.apply(e.target,true))e.target.dispatchEvent(new Event('input',{bubbles:true}));};
  document.addEventListener('focusout',finish);document.addEventListener('compositionend',finish);
@@ -598,7 +617,7 @@ $('datasetForm').onsubmit=async e=>{
 $('datasetForm').addEventListener('input',e=>{if(e.target.matches('#datasetName, #datasetColumns input, #datasetX, #datasetY input, #datasetStyle')){datasetRevision++;$('datasetImportError').textContent='';}});
 
 document.querySelectorAll('[data-calculus-insert]').forEach(button=>button.onclick=()=>{
- let target=symbolTarget;if(!target?.matches('.expression:not(.note-cell) textarea, #functionBody, #calculusExpression')){target=firstEquationInput();}
+ let target=symbolTarget;if(!target?.matches('.expression:not(.note-cell):not(.python-cell) textarea, #functionBody, #fieldBody, #fieldPoint, #fieldDirection, #calculusExpression')){target=firstEquationInput();}
  if(!target)return;
  const start=target.selectionStart??target.value.length,end=target.selectionEnd??start,selected=target.value.slice(start,end);
  const text=button.dataset.calculusInsert==='derivative'?`d/dx(${selected||'f(x)'})`:`∫_{0}^{x} (${selected||'f(t)'}) dt`;
@@ -675,6 +694,8 @@ function renderGraphs(){
 }
 function populateGraph(g){
  const config=GraphTools.types[g.type];$('graphType').value=g.type;$('graphName').value=g.name;$('graphColor').value=g.color;
+ $('graphZMin').value=(g.zrange||[-5,5])[0];$('graphZMax').value=(g.zrange||[-5,5])[1];$('graphDensity').value=g.density||13;$('graphDensity').max=g.type==='vectorfield3d'?11:25;$('graphArrowScale').value=g.arrow_scale??.8;$('graphNormalize').checked=g.normalize??false;
+ $('graphFieldOptions').hidden=!config.field;$('graphZRangeFields').hidden=g.type!=='vectorfield3d';
  $('graphParameter').value=g.parameter;$('graphMin').value=g.range[0];$('graphMax').value=g.range[1];$('graphYMin').value=g.yrange[0];$('graphYMax').value=g.yrange[1];$('graphSamples').value=g.samples;$('graphBins').value=g.bins;$('graphProbabilityMode').value=g.probability_mode||'density';
  const fields=$('graphFields');fields.replaceChildren();
  for(const [key,title] of Object.entries(config.fields)){
@@ -685,7 +706,7 @@ function populateGraph(g){
  for(const id of ['graphYMin','graphYMax'])$(id).required=!!config.grid;
  $('graphSamples').required=!config.data&&!config.grid;$('graphBins').required=g.type==='histogram';
  $('graphRangeLabel').textContent=config.grid||g.type==='function'?'x minimum':'Parameter minimum';
- $('graphDescription').textContent=config.data?'Enter numeric vectors or imported column names. Paired charts preserve missing-value alignment and input order.':config.grid?'Sample a real x/y grid. Implicit curves trace the zero level; surfaces and contours show the formula value.':'Enter coordinate formulas and a sampling interval. Polar angles use radians; coordinate formulas can call your worksheet functions.';
+ $('graphDescription').textContent=config.field?'Arrows show direction and relative magnitude on a regular grid. Hover on an origin for actual components and magnitude. Zero vectors appear as dots; singular points are omitted.':config.data?'Enter numeric vectors or imported column names. Paired charts preserve missing-value alignment and input order.':config.grid?'Sample a real x/y grid. Implicit curves trace the zero level; surfaces and contours show the formula value.':'Enter coordinate formulas and a sampling interval. Polar angles use radians; coordinate formulas can call your worksheet functions.';
  updateGraphPreview();
 }
 function openGraph(id=null){
@@ -700,6 +721,7 @@ function updateGraphPreview(){
 function graphDraft(){
  const type=$('graphType').value,g=GraphTools.fresh(type,graphEdit||uid(),$('graphColor').value),existing=graphs.find(g=>g.id===graphEdit);
  g.visible=existing?.visible??true;g.name=$('graphName').value.trim();g.parameter=GreekInput.normalize($('graphParameter').value.trim());
+ g.zrange=[Number($('graphZMin').value),Number($('graphZMax').value)];g.density=Number($('graphDensity').value);g.arrow_scale=Number($('graphArrowScale').value);g.normalize=$('graphNormalize').checked;
  g.range=[Number($('graphMin').value),Number($('graphMax').value)];g.yrange=[Number($('graphYMin').value),Number($('graphYMax').value)];g.samples=Number($('graphSamples').value);g.bins=Number($('graphBins').value);g.probability_mode=$('graphProbabilityMode').value;
  for(const input of $('graphFields').querySelectorAll('textarea'))g[input.dataset.field]=GreekInput.normalize(input.value.trim());
  return GraphTools.validate([g])[0];
@@ -862,10 +884,10 @@ $('waveletSaveDataset').onclick=async()=>{
 };
 
 let residentTarget=null;
-const residentEditor='.expression:not(.note-cell) textarea, #functionBody, #calculusExpression, #matrixGrid input, #graphFields textarea, #waveletSource, #probabilitySource';
+const residentEditor='.expression:not(.note-cell):not(.python-cell) textarea, #functionBody, #fieldBody, #fieldPoint, #fieldDirection, #calculusExpression, #matrixGrid input, #graphFields textarea, #waveletSource, #probabilitySource';
 document.addEventListener('focusin',e=>{if(e.target.matches(residentEditor))residentTarget=e.target;});
 function openResident(){
- for(const [dialog,field] of [['functionDialog','functionBody'],['calculusDialog','calculusExpression'],['waveletDialog','waveletSource']])if($(dialog).open&&(!residentTarget?.isConnected||!$(dialog).contains(residentTarget)))residentTarget=$(field);
+ for(const [dialog,field] of [['fieldDialog','fieldBody'],['functionDialog','functionBody'],['calculusDialog','calculusExpression'],['waveletDialog','waveletSource']])if($(dialog).open&&(!residentTarget?.isConnected||!$(dialog).contains(residentTarget)))residentTarget=$(field);
  if(!residentTarget?.isConnected){residentTarget=firstEquationInput();}
  $('residentSearch').value='';renderResident();$('residentDialog').showModal();$('residentSearch').focus();
 }
@@ -886,3 +908,59 @@ for(const button of document.querySelectorAll('[data-resident-open]'))button.onc
 let graphRenameId=null;
 function openGraphRename(id){const graph=graphs.find(g=>g.id===id);if(!graph)return;graphRenameId=id;$('graphRenameName').value=graph.name;$('graphRenameError').textContent='';$('graphRenameDialog').showModal();$('graphRenameName').focus();$('graphRenameName').select();}
 $('graphRenameForm').onsubmit=e=>{e.preventDefault();try{const graph=graphs.find(g=>g.id===graphRenameId);if(!graph)throw Error('This graph was removed.');const name=$('graphRenameName').value.trim();if(!name||name.length>80)throw Error('Use a graph name of 1–80 characters.');graph.name=name;saveLocal();renderGraphs();drawPlot();$('graphRenameDialog').close();}catch(error){$('graphRenameError').textContent=error.message;}};
+
+$('addPythonBtn').onclick=()=>{
+ if(rows.length>=40){toast('Maximum 40 cells.');return;}
+ rows.push({...newRow(),type:'python',text:'# Mathematical Python; use ** for powers\nimport numpy as np\n\ndef pulse(t):\n    amplitude = np.sin(t)\n    if t < 0:\n        return 0\n    return amplitude ** 2'});renderRows();schedule(0);
+};
+$('randomBtn').onclick=()=>{$('randomDialog').showModal();};
+$('randomForm').onsubmit=e=>{e.preventDefault();
+ const kind=$('randomKind').value,n=Number($('randomSize').value),m=Number($('randomColumns').value),seed=Number($('randomSeed').value),p=Number($('randomProbability').value),name=$('randomName').value.trim();
+ if(!/^[\p{L}][\p{L}\p{N}_]*$/u.test(name)){toast('Enter a variable name.');return;}
+ const call=['activate','random_gate'].includes(kind)?`${kind}(${$('randomSource').value}, ${p}, ${seed})`:kind==='stochastic_matrix'?`${kind}(${n}, ${seed})`:kind.endsWith('vector')?`${kind}(${n}, ${seed})`:`${kind}(${n}, ${m}, ${seed})`;
+ if(rows.length>=40){toast('Maximum 40 cells.');return;}addExpression(`${name} = ${call}`);$('randomDialog').close();
+};
+$('randomReseed').onclick=()=>{$('randomSeed').value=crypto.getRandomValues(new Uint32Array(1))[0];};
+
+let fieldRevision=0;
+function openFieldSuite(index=null){
+ fieldRevision++;$('fieldError').textContent='';$('fieldComputed').textContent='';
+ const r=index===null?null:results[index];
+ if(r?.function){$('fieldName').value=r.function.name;$('fieldArgs').value=r.function.parameters.join(', ');$('fieldBody').value=r.function.body;$('fieldDimensions').value=String(r.input_dimensions===3||r.function.parameters.length===3?3:2);}
+ updateFieldPreview();$('fieldDialog').showModal();
+}
+function updateFieldPreview(){fieldRevision++;renderMath($('fieldPreview'),`${$('fieldName').value}(${$('fieldArgs').value})=${$('fieldBody').value}`);}
+function fieldFormula(){
+ const op=$('fieldOperation').value,name=$('fieldName').value.trim();
+ if(!/^[\p{L}][\p{L}\p{N}_]*$/u.test(name))throw Error('Enter a function name.');
+ return op==='work'?`work(${name},${$('fieldPath').value},${$('fieldLower').value},${$('fieldUpper').value})`:`${op}(${name},${$('fieldPoint').value}${op==='field_directional'?','+$('fieldDirection').value:''})`;
+}
+function addFieldGraph(){
+ if(graphs.length>=12)throw Error('Maximum 12 saved graphs.');
+ const dimension=Number($('fieldDimensions').value),name=$('fieldName').value.trim(),args=$('fieldArgs').value.split(',').map(s=>s.trim()),coordinates=dimension===3?'x,y,z':'x,y';
+ const g=GraphTools.fresh(dimension===3?'vectorfield3d':'vectorfield',uid(),colors[graphs.length%colors.length]);
+ g.name=name+' · vector field';g.expression=`${name}(${args.length===1?'['+coordinates+']':coordinates})`;graphs.push(GraphTools.validate([g])[0]);graphSelection=g.id;view='created';renderGraphs();schedule(0);$('fieldDialog').close();
+}
+$('fieldBtn').onclick=()=>openFieldSuite();
+for(const id of ['fieldName','fieldArgs','fieldBody'])$(id).addEventListener('input',updateFieldPreview);
+$('fieldDimensions').onchange=()=>{fieldRevision++;const three=$('fieldDimensions').value==='3';if(['[1,2]','[1,2,3]'].includes($('fieldPoint').value))$('fieldPoint').value=three?'[1,2,3]':'[1,2]';if(['[1,0]','[1,0,0]'].includes($('fieldDirection').value))$('fieldDirection').value=three?'[1,0,0]':'[1,0]';if(['[-r[1],r[0]]','[-r[1],r[0],-r[2]]'].includes($('fieldBody').value))$('fieldBody').value=three?'[-r[1],r[0],-r[2]]':'[-r[1],r[0]]';updateFieldPreview();};
+$('fieldOperation').onchange=()=>{fieldRevision++;const op=$('fieldOperation').value;$('fieldDirectionLabel').hidden=op!=='field_directional';$('fieldPointFields').hidden=op==='work';$('fieldPathFields').hidden=op!=='work';};
+for(const id of ['fieldPoint','fieldDirection','fieldPath','fieldLower','fieldUpper'])$(id).addEventListener('input',()=>fieldRevision++);
+$('fieldPlot').onclick=()=>{try{addFieldGraph();}catch(e){$('fieldError').textContent=e.message;}};
+$('fieldDefine').onclick=async()=>{
+ const revision=fieldRevision,worksheet=requestId;const button=$('fieldDefine');button.disabled=true;$('fieldError').textContent='';
+ try{
+  if(rows.length>=40||graphs.length>=12)throw Error('Free one worksheet cell or graph before adding a field.');
+  const text=`${$('fieldName').value}(${$('fieldArgs').value})=${$('fieldBody').value}`;
+  const response=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expressions:[...rows.map(r=>({text:r.text,type:r.type??'expression'})),{text}],datasets,indices:[rows.length],validate_only:true})});const data=await response.json();
+  if(revision!==fieldRevision||worksheet!==requestId)return;
+  if(!response.ok)throw Error(data.error||'Could not validate field.');if(data.results[0].error)throw Error(data.results[0].error);if(!data.results[0].function)throw Error('Enter a named function with valid arguments.');
+  rows.push(newRow(text));renderRows();addFieldGraph();
+ }catch(e){$('fieldError').textContent=e.message;}finally{button.disabled=false;}
+};
+$('fieldEvaluate').onclick=async()=>{
+ const revision=fieldRevision,worksheet=requestId;const button=$('fieldEvaluate');button.disabled=true;$('fieldError').textContent='';$('fieldComputed').textContent='Calculating…';
+ try{const r=await calculateDraft(fieldFormula());if(revision!==fieldRevision||worksheet!==requestId)return;if(!['scalar','vector','matrix'].includes(r.kind))throw Error('Enter a numeric position or defined constants to evaluate at a point.');$('fieldComputed').textContent=JSON.stringify(r.value,null,2)+(r.calculus?.length?'\n'+r.calculus.at(-1).operation+' · estimated error '+r.calculus.at(-1).error_estimate:'');}
+ catch(e){if(revision===fieldRevision){$('fieldError').textContent=e.message;$('fieldComputed').textContent='';}}finally{button.disabled=false;}
+};
+$('fieldAddOperation').onclick=()=>{try{addExpression(fieldFormula());$('fieldDialog').close();}catch(e){$('fieldError').textContent=e.message;}};
