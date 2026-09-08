@@ -1,0 +1,47 @@
+{
+  "version": 5,
+  "rows": [
+    {
+      "type": "expression",
+      "text": "|ψ⟩=(|0⟩+i|1⟩)/sqrt(2)"
+    },
+    {
+      "type": "expression",
+      "text": "⟨ψ|ψ⟩"
+    },
+    {
+      "type": "expression",
+      "text": "⟨ψ|pauliY()|ψ⟩"
+    },
+    {
+      "type": "expression",
+      "text": "ρ=|ψ⟩⟨ψ|"
+    },
+    {
+      "type": "expression",
+      "text": "|Φ⟩=(|00⟩+|11⟩)/sqrt(2)"
+    },
+    {
+      "type": "expression",
+      "text": "probabilities(|Φ⟩)"
+    },
+    {
+      "type": "expression",
+      "text": "|u(t)⟩=cos(t/2)|0⟩+sin(t/2)|1⟩"
+    },
+    {
+      "type": "expression",
+      "text": "E(t)=⟨u(t)|pauliZ()|u(t)⟩"
+    }
+  ],
+  "view": "quantum",
+  "bounds": [
+    -2,
+    2,
+    -2,
+    2
+  ],
+  "datasets": [],
+  "graphs": [],
+  "component": "real"
+}

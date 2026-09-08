@@ -1,0 +1,79 @@
+{
+  "version": 5,
+  "rows": [
+    {
+      "text": "f_0(x)=(1-x^2)*exp(-x^2/2)",
+      "visible": true,
+      "plotName": "Document line 1"
+    },
+    {
+      "text": "f_1(x)=(1-(x^3-3x^2*(1-x))^2)*exp(-(x^3-3x^2*(1-x))^2/2)",
+      "visible": true,
+      "plotName": "Document line 2"
+    },
+    {
+      "text": "F(x,y)=f_0(x)*f_1(y)",
+      "visible": true,
+      "plotName": "Document line 3"
+    },
+    {
+      "text": "g(θ,φ)=∫_{0}^{θ} ∫_{0}^{φ} F(x,y) dydx",
+      "visible": true,
+      "plotName": "Document line 4"
+    },
+    {
+      "text": "d_x(x,y)=d/dx F(x,y)",
+      "visible": true,
+      "plotName": "Document line 5"
+    },
+    {
+      "text": "N(x)=normaldist(0,1).pdf(x)",
+      "visible": true,
+      "plotName": "Document line 6"
+    },
+    {
+      "text": "i_0(t)=∫_{0}^{t} N(x) log10(N(x)/f_0(x)) dx",
+      "visible": true,
+      "plotName": "Document line 7"
+    },
+    {
+      "text": "i_1(t)=∫_{0}^{t} N(x) log10(N(x)/f_1(x)) dx",
+      "visible": true,
+      "plotName": "Document line 8"
+    },
+    {
+      "text": "p_t(t,N)=∏_{n=1}^{N} f_0(t)",
+      "visible": true,
+      "plotName": "Document line 9"
+    },
+    {
+      "text": "d/dx ∑_{n=1}^{3} f_0(x)",
+      "visible": true,
+      "plotName": "Document line 10"
+    },
+    {
+      "text": "c_0(t)=∫_{0}^{t} ∫_{0}^{t} p_t(x,y) dxdy",
+      "visible": true,
+      "plotName": "Document line 11"
+    },
+    {
+      "text": "c_0(1)",
+      "visible": true,
+      "plotName": "Document line 12"
+    }
+  ],
+  "datasets": [],
+  "graphs": [],
+  "bounds": [
+    0,
+    0.75,
+    0,
+    0.75
+  ],
+  "view": "graph",
+  "component": "real",
+  "curve_range": [
+    0,
+    0.75
+  ]
+}

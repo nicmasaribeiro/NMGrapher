@@ -1,0 +1,125 @@
+{
+  "version": 5,
+  "datasets": [],
+  "view": "created",
+  "component": "real",
+  "bounds": [
+    -5,
+    5,
+    -5,
+    5
+  ],
+  "curve_range": [
+    0,
+    6.283185307179586
+  ],
+  "rows": [
+    {
+      "id": "0",
+      "type": "expression",
+      "text": "F(r)=[-r[1],r[0]]",
+      "visible": true
+    },
+    {
+      "id": "1",
+      "type": "expression",
+      "text": "field_curl(F,[1,2])",
+      "visible": true
+    },
+    {
+      "id": "2",
+      "type": "expression",
+      "text": "field_divergence(F,[1,2])",
+      "visible": true
+    },
+    {
+      "id": "3",
+      "type": "expression",
+      "text": "field_jacobian(F,[1,2])",
+      "visible": true
+    },
+    {
+      "id": "4",
+      "type": "expression",
+      "text": "U(r)=dot(r,r)/2",
+      "visible": true
+    },
+    {
+      "id": "5",
+      "type": "expression",
+      "text": "G(r)=force(U,r)",
+      "visible": true
+    },
+    {
+      "id": "6",
+      "type": "expression",
+      "text": "circle(t)=[cos(t),sin(t)]",
+      "visible": true
+    },
+    {
+      "id": "7",
+      "type": "expression",
+      "text": "work(F,circle,0,2*pi)",
+      "visible": true
+    },
+    {
+      "id": "8",
+      "type": "expression",
+      "text": "work(G,circle,0,2*pi)",
+      "visible": true
+    }
+  ],
+  "graphs": [
+    {
+      "id": "rotation",
+      "type": "vectorfield",
+      "name": "Rotational force field",
+      "expression": "F([x,y])",
+      "density": 13,
+      "color": "#169582",
+      "visible": true,
+      "parameter": "t",
+      "range": [
+        -3,
+        3
+      ],
+      "yrange": [
+        -3,
+        3
+      ],
+      "zrange": [
+        -3,
+        3
+      ],
+      "samples": 400,
+      "arrow_scale": 0.8,
+      "normalize": false
+    },
+    {
+      "id": "spring3d",
+      "type": "vectorfield3d",
+      "name": "Spring force −∇U",
+      "expression": "G([x,y,z])",
+      "density": 7,
+      "color": "#2864d7",
+      "visible": true,
+      "parameter": "t",
+      "range": [
+        -3,
+        3
+      ],
+      "yrange": [
+        -3,
+        3
+      ],
+      "zrange": [
+        -3,
+        3
+      ],
+      "samples": 400,
+      "arrow_scale": 0.8,
+      "normalize": false
+    }
+  ],
+  "graphSelection": "rotation"
+}

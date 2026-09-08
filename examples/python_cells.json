@@ -1,0 +1,55 @@
+{
+  "version": 5,
+  "datasets": [],
+  "graphs": [],
+  "bounds": [
+    -1,
+    5,
+    -2,
+    4
+  ],
+  "view": "graph",
+  "component": "real",
+  "curve_range": [
+    0,
+    5
+  ],
+  "rows": [
+    {
+      "id": "0",
+      "type": "note",
+      "visible": true,
+      "text": "Python mathematical subset: indentation, ** powers, numeric arrays, if/else, def, and bounded for/range. Click an exported name to add a graph."
+    },
+    {
+      "id": "1",
+      "type": "python",
+      "visible": true,
+      "text": "import numpy as np\nA = random_matrix(2, 2, 42)\nv = np.array([1, 0])\n\ndef response(t):\n    weights = A @ v\n    if t < 0:\n        return 0 * weights\n    return np.sin(t) * weights\n\ndef polynomial(t):\n    total = 0\n    for k in range(4):\n        total += t ** k\n    return total"
+    },
+    {
+      "id": "2",
+      "type": "expression",
+      "visible": true,
+      "text": "A"
+    },
+    {
+      "id": "3",
+      "type": "expression",
+      "visible": true,
+      "text": "response(x)"
+    },
+    {
+      "id": "4",
+      "type": "expression",
+      "visible": true,
+      "text": "polynomial(2)"
+    },
+    {
+      "id": "5",
+      "type": "expression",
+      "visible": true,
+      "text": "integrate(polynomial(x),x,0,1)"
+    }
+  ]
+}

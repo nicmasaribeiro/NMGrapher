@@ -1,0 +1,67 @@
+{
+  "version": 5,
+  "datasets": [],
+  "graphs": [],
+  "bounds": [
+    -1,
+    5,
+    -2,
+    4
+  ],
+  "view": "graph",
+  "component": "real",
+  "curve_range": [
+    0,
+    5
+  ],
+  "rows": [
+    {
+      "id": "0",
+      "type": "note",
+      "visible": true,
+      "text": "Edit seed r to draw another repeatable realization. Entry activation and whole-object gates preserve shape."
+    },
+    {
+      "id": "1",
+      "type": "expression",
+      "visible": true,
+      "text": "r=42"
+    },
+    {
+      "id": "2",
+      "type": "expression",
+      "visible": true,
+      "text": "A=random_matrix(3,3,r)"
+    },
+    {
+      "id": "3",
+      "type": "expression",
+      "visible": true,
+      "text": "v=normal_vector(3,r+1)"
+    },
+    {
+      "id": "4",
+      "type": "expression",
+      "visible": true,
+      "text": "B=activate(A,0.5,r+2)"
+    },
+    {
+      "id": "5",
+      "type": "expression",
+      "visible": true,
+      "text": "B*v"
+    },
+    {
+      "id": "6",
+      "type": "expression",
+      "visible": true,
+      "text": "P=stochastic_matrix(3,r+3)"
+    },
+    {
+      "id": "7",
+      "type": "expression",
+      "visible": true,
+      "text": "w(t)=random_gate(v,0.5,100+floor(t))"
+    }
+  ]
+}
