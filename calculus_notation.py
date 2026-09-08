@@ -7,6 +7,17 @@ DERIVATIVE = re.compile(r'(?<![\w])d\s*(?P<order>²|\^\{?2\}?)?\s*/\s*d\s*(?P<va
 DIFFERENTIAL = re.compile(r'd\s*('+NAME+r')')
 
 
+def differential_at(text, position):
+    # Adjacent one-letter differentials (dydx, dzdydx), plus delimited
+    # multiletter/subscript names such as dtheta_1 or d x_1.
+    match=DIFFERENTIAL.match(text,position)
+    if not match:return None
+    variable=match[1]
+    if re.fullmatch(r'[^\W\d](?:d[^\W\d])+',variable):
+        return variable[0], position+2
+    return variable,match.end()
+
+
 def skip_space(text, position):
     while position < len(text) and text[position].isspace(): position += 1
     return position
@@ -46,20 +57,20 @@ def integral_at(text, start, depth):
         lower,position=bound(text,position+1);position=skip_space(text,position)
         if position>=len(text) or text[position]!='^':raise ValueError('A definite integral needs both lower and upper bounds: ∫_{0}^{x} (f(t)) dt.')
         upper,position=bound(text,position+1)
-    body_start=skip_space(text,position);position=body_start;stack=[]
+    body_start=skip_space(text,position);position=body_start;stack=[];nested_end=None
     pairs={')':'(', '}':'{', ']':'['}
     while position<len(text):
         char=text[position]
         if not stack and char=='∫':
-            _,position=integral_at(text,position,depth+1);continue
-        if not stack and char=='d' and (position==body_start or text[position-1].isspace() or text[position-1] in ')]}'):
-            match=DIFFERENTIAL.match(text,position)
+            _,position=integral_at(text,position,depth+1);nested_end=position;continue
+        if not stack and char=='d' and (position==body_start or position==nested_end or text[position-1].isspace() or text[position-1] in ')]}'):
+            match=differential_at(text,position)
             if match:
-                end=match.end();after=skip_space(text,end)
-                if after==len(text) or text[after] in '+-*/@,)]}' or (text[after]=='d' and after>end):
+                variable,end=match;after=skip_space(text,end)
+                if after==len(text) or text[after] in '+-*/@,)]}' or (text[after]=='d' and differential_at(text,after)):
                     body=text[body_start:position].strip()
                     if not body:raise ValueError('An integral needs an integrand before its differential.')
-                    body=normalize_calculus(body,depth+1);variable=match[1]
+                    body=normalize_calculus(body,depth+1)
                     if lower is None:return f'antiderivative({body}, {variable})',end
                     return f'integrate({body}, {variable}, {normalize_calculus(lower,depth+1)}, {normalize_calculus(upper,depth+1)})',end
         if char in '({[':stack.append(char)
@@ -68,6 +79,23 @@ def integral_at(text, start, depth):
             if stack.pop()!=pairs[char]:raise ValueError('Check matching brackets in the integral.')
         position+=1
     raise ValueError('End the integral with its differential, for example ∫_{0}^{x} (f(t)) dt.')
+
+
+
+def operator_operand(text,position):
+    if position>=len(text):raise ValueError('Enter an expression after the calculus operator.')
+    if text[position] in '({[':return group(text,position)
+    start=position;stack=[];pairs={')':'(',']':'[','}':'{'}
+    while position<len(text):
+        char=text[position]
+        if not stack and (char in ',)]}' or (char=='d' and position>start and (text[position-1].isspace() or text[position-1] in ')]}') and differential_at(text,position))):break
+        if char in '([{':stack.append(char)
+        elif char in ')]}':
+            if not stack or stack.pop()!=pairs[char]:raise ValueError('Check matching brackets in the operator operand.')
+        position+=1
+    operand=text[start:position].strip()
+    if not operand:raise ValueError('Enter an expression after the calculus operator.')
+    return operand,position
 
 
 def normalize_calculus(text, depth=0):
@@ -95,7 +123,8 @@ def normalize_calculus(text, depth=0):
                     end+=len(power[0])
             elif variable.endswith('²'):
                 raise ValueError('Derivative orders in the numerator and denominator must match.')
-            end=skip_space(text,end);operand,end=group(text,end)
+            end=skip_space(text,end)
+            operand,end=operator_operand(text,end)
             operand=normalize_calculus(operand,depth+1)
             output.append(f'diff({operand}, {variable}'+(f', {variable}, 2)' if order==2 else ')'))
             position=end;continue
@@ -111,7 +140,7 @@ def aggregate_at(text,start,depth):
     variable,lower=match.groups();position=skip_space(text,position)
     if position>=len(text) or text[position]!='^':raise ValueError('A sum/product needs an upper bound.')
     upper,position=bound(text,position+1);position=skip_space(text,position)
-    body,end=group(text,position)
+    body,end=operator_operand(text,position)
     function='summation' if text[start] in '∑Σ' else 'product'
     return f'{function}({normalize_calculus(body,depth+1)}, {variable}, {normalize_calculus(lower,depth+1)}, {normalize_calculus(upper,depth+1)})',end
 

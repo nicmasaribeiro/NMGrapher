@@ -150,3 +150,60 @@ def multivariable(function, point, operation, step=None, direction=None):
     return result, {'operation':operation, 'error_estimate':estimate, 'evaluations':len(cache),
                     'undefined_samples':int(np.count_nonzero(~np.isfinite(result))),
                     'input_dimensions':n, 'output_shape':list(f0.shape)}
+
+
+def integrate_multiple(function, bounds, abs_tol=1e-8, rel_tol=1e-7):
+    """Adaptive tensor Gauss quadrature on a mapped unit square/cube.
+
+    Bounds are callbacks in outermost-to-innermost order and may depend on
+    coordinates already bound. Comparing orders 8 and 12 gives a numerical
+    error estimate; it is not a rigorous bound for arbitrary integrands.
+    """
+    from itertools import product
+    dimensions=len(bounds)
+    if dimensions not in (2,3):raise CalculusError('Use two or three integration variables.')
+    for value,label,low,high in [(abs_tol,'Absolute tolerance',1e-12,1),(rel_tol,'Relative tolerance',0,1)]:
+        if np.ndim(value) or np.iscomplexobj(value) or not np.isfinite(value) or not low<=value<=high:
+            raise CalculusError(f'{label} is outside the supported range.')
+    rules={n:np.polynomial.legendre.leggauss(n) for n in (8,12)}
+    shape=None;evaluations=0
+    def sample(unit):
+        nonlocal shape,evaluations
+        point=[];jacobian=1.0
+        for u,bound in zip(unit,bounds):
+            lo,hi=[np.asarray(v) for v in bound(point)]
+            if any(v.ndim or not np.isfinite(v) or np.imag(v)!=0 for v in (lo,hi)):
+                raise CalculusError('Multiple-integral bounds must be finite real scalars at each point.')
+            lo,hi=float(lo.real),float(hi.real)
+            point.append(lo+(hi-lo)*u);jacobian*=hi-lo
+        value=np.asarray(function(point),dtype=complex);evaluations+=1
+        if shape is None:shape=value.shape
+        elif value.shape!=shape:raise CalculusError('Integrand output shape changes inside the integration region.')
+        if value.ndim>2 or not value.size or (value.ndim and max(value.shape)>32):
+            raise CalculusError('Integrands must return scalars, vectors, or matrices up to 32×32.')
+        result=value*jacobian if jacobian else np.zeros_like(value)
+        if not np.all(np.isfinite(result)):
+            raise CalculusError('Integrand is non-finite inside the region; split at singularities.')
+        return result
+    def rule(lo,hi,n):
+        nodes,weights=rules[n];half=(hi-lo)/2;mid=(hi+lo)/2;total=None
+        for indices in product(range(n),repeat=dimensions):
+            value=sample(mid+half*nodes[list(indices)])*np.prod(weights[list(indices)])
+            total=value if total is None else total+value
+        return total*np.prod(half)
+    def cell(lo,hi):
+        coarse=rule(lo,hi,8);fine=rule(lo,hi,12)
+        return [lo,hi,fine,float(np.max(np.abs(fine-coarse)))]
+    cells=[cell(np.zeros(dimensions),np.ones(dimensions))]
+    while True:
+        result=sum(c[2] for c in cells);error=sum(c[3] for c in cells)
+        tolerance=max(float(abs_tol),float(rel_tol)*float(np.max(np.abs(result))))
+        if error<=tolerance:break
+        if len(cells)>=64:raise CalculusError('Multiple integral did not converge; split the region or relax the tolerance.')
+        index=max(range(len(cells)),key=lambda k:cells[k][3]);lo,hi,_,_=cells.pop(index)
+        axis=int(np.argmax(hi-lo));mid=(lo[axis]+hi[axis])/2
+        left_hi=hi.copy();left_hi[axis]=mid;right_lo=lo.copy();right_lo[axis]=mid
+        cells.extend([cell(lo,left_hi),cell(right_lo,hi)])
+    return np.asarray(result),{'operation':'multiple integral','dimensions':dimensions,
+        'error_estimate':error,'evaluations':evaluations,'regions':len(cells),
+        'absolute_tolerance':float(abs_tol),'relative_tolerance':float(rel_tol)}

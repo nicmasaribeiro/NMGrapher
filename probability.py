@@ -184,3 +184,34 @@ def plot(d,lo=None,hi=None):
     else:x=np.linspace(lo,hi,500);y=d.rv.pdf(x)
     clean=lambda a:[float(v) if np.isfinite(v) else None for v in a]
     return {'x':clean(x),'y':clean(y),'cdf':clean(d.rv.cdf(x)), 'range':[lo,hi]}
+
+# Desmos-style constructors and a closed set of distribution operations.
+ALIASES = {'normaldist':'normal', 'uniformdist':'uniform', 'poissondist':'poisson',
+           'binomialdist':'binomial', 'geodist':'geometric',
+           'exponentialdist':'exponential', 'boltzmanndist':'boltzmann'}
+FUNCTIONS.update({alias:FUNCTIONS[name] for alias,name in ALIASES.items()})
+METHODS = {'pdf','pmf','cdf','sf','inversecdf','quantile','mean','median','var','stdev','entropy','sample'}
+PROPERTIES = {'mean','median','var','stdev','entropy'}
+
+
+def call(d, x):
+    """A named distribution is callable as its density or exact probability mass."""
+    d=distribution(d)
+    return mass(d,x) if d.discrete else density(d,x)
+
+
+def method(d, name, args):
+    d=distribution(d)
+    if name not in METHODS:raise ValueError('Unsupported distribution operation.')
+    if name in PROPERTIES:
+        if args:raise ValueError(f'{name} takes no arguments on a distribution.')
+        return getattr(d.rv, {'stdev':'std'}.get(name,name))()
+    if name=='cdf' and len(args)==2:return interval(d,*args)
+    if name=='sample' and len(args) in (1,2):return draw(d,*args)
+    if len(args)!=1:raise ValueError(f'{name} needs one argument (cdf also accepts lower, upper).')
+    if name=='pdf':
+        # Desmos uses .pdf for continuous densities and rounded discrete masses.
+        return mass(d,np.floor(coordinates(args[0])+.5)) if d.discrete else density(d,args[0])
+    function={'pmf':mass,'cdf':cumulative,'sf':survival,'inversecdf':quantile,'quantile':quantile}.get(name)
+    if function is None:raise ValueError('Use sample(count[, seed]).')
+    return function(d,args[0])

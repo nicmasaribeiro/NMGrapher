@@ -3,9 +3,12 @@ import ast
 import re
 import operator
 import keyword
+import io
+import tokenize
 from notation import normalize_notation
-from calculus import differentiate, integrate, multivariable
+from calculus import differentiate, integrate, integrate_multiple, multivariable
 from symbols import normalize_symbols
+from sampling import sample_grid
 from array_types import MatrixValue, VectorValue
 import quantum
 import linear_algebra
@@ -21,6 +24,11 @@ MAX_MATRIX = 32
 
 
 class ExpressionError(ValueError):
+    pass
+
+
+class ComputationCancelled(Exception):
+    """Internal cooperative cancellation; never rendered as a formula error."""
     pass
 
 def matrix(a):
@@ -146,24 +154,38 @@ def parse(text):
     if len(text)>1200:
         raise ExpressionError('Expression is too long (maximum 1200 characters).')
     try:
+        tokens=list(tokenize.generate_tokens(io.StringIO(text).readline))
+        implicit=[];previous=None
+        for token in tokens:
+            if previous and ((previous.type==tokenize.NUMBER and (token.type==tokenize.NAME or token.string=='(')) or (previous.string in (')',']') and token.type==tokenize.NAME)):
+                implicit.append((tokenize.OP,'*'))
+            implicit.append((token.type,token.string))
+            if token.type not in (tokenize.NL,tokenize.NEWLINE,tokenize.INDENT,tokenize.DEDENT):previous=token
+        text=tokenize.untokenize(implicit)
         tree=ast.parse(text,mode='eval').body
-    except (SyntaxError,RecursionError) as exc:
+    except (SyntaxError,RecursionError,tokenize.TokenError) as exc:
         raise ExpressionError('Check expression syntax. Use * for multiplication.') from exc
     if sum(1 for _ in ast.walk(tree))>300:
         raise ExpressionError('Expression is too complex.')
     return tree
 
 class Calculator:
-    def __init__(self, rows, datasets=None):
+    def __init__(self, rows, datasets=None, cancel_check=None):
+        self.cancel_check=cancel_check
+        self.cancel_ticks=0
         self.rows=rows
         self.datasets, self.dataset_values = dataset_math.validate_datasets([] if datasets is None else datasets, set(FUNCTIONS)|set(CONSTANTS)|CALCULUS|{'x','y'})
         self.definitions={}
         self.functions={}
         self.items=[]
         self.steps=0
+        self.sampling_budget=None
+        self.step_limit=50000
         self.calculus_diagnostics=[]
         self.calculus_depth=0
         for row in rows:
+            if row.get('type')=='note':
+                self.items.append({'text':row.get('text',''),'kind':'note'});continue
             text=row.get('text','').strip()
             item={'text':text,'kind':'value'}
             try:
@@ -201,10 +223,19 @@ class Calculator:
                 item['error']=str(exc)
             self.items.append(item)
 
+    def check_cancelled(self):
+        if self.cancel_check is not None and self.cancel_check():
+            raise ComputationCancelled('Computation cancelled.')
+
     def evaluate(self,node,local=None,stack=()):
+        if self.cancel_check is not None:
+            self.cancel_ticks += 1
+            if self.cancel_ticks % 128 == 1:self.check_cancelled()
         local={} if local is None else local
+        if self.sampling_budget is not None:self.sampling_budget.consume()
+        if self.steps==0:self.step_limit=500000 if self.contains_multiple_integrals(node) else 50000
         self.steps+=1
-        if self.steps>50000 or len(stack)>40:
+        if self.steps>self.step_limit or len(stack)>40:
             raise ExpressionError('Evaluation limit reached; simplify the expression.')
         if isinstance(node,ast.Constant) and type(node.value) in (int,float,complex):
             if abs(node.value)>1e100: raise ExpressionError('Number is too large.')
@@ -246,6 +277,18 @@ class Calculator:
                     raise ExpressionError('Complex numbers are not ordered. Compare abs(...), real(...), or imag(...).')
                 result=np.logical_and(result,COMPS[type(op)](a,b));a=b
             return result
+        if isinstance(node,ast.Attribute):
+            if node.attr not in probability.PROPERTIES:raise ExpressionError('Only distribution statistics may be read as properties.')
+            return probability.method(self.evaluate(node.value,local,stack),node.attr,[])
+        if isinstance(node,ast.Call) and not isinstance(node.func,ast.Name) and not node.keywords:
+            args=[self.evaluate(n,local,stack) for n in node.args]
+            if isinstance(node.func,ast.Attribute):
+                if node.func.attr not in probability.METHODS:raise ExpressionError('Unsupported distribution operation.')
+                result=probability.method(self.evaluate(node.func.value,local,stack),node.func.attr,args)
+            else:
+                if len(args)!=1:raise ExpressionError('A distribution function needs one coordinate.')
+                result=probability.call(self.evaluate(node.func,local,stack),args[0])
+            return np.asarray(result).view(DataColumn) if any(isinstance(a,DataColumn) for a in args) and np.ndim(result)==1 else result
         if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and not node.keywords:
             name=node.func.id
             if name in REDUCTIONS and len(node.args)==4:return self.evaluate_reduction(node,local,stack)
@@ -264,6 +307,10 @@ class Calculator:
                 params,tree=self.functions[name]
                 if len(args)!=len(params):raise ExpressionError(f'{name} expects {len(params)} argument(s); received {len(args)}.')
                 return self.evaluate(tree,dict(zip(params,args)),stack+(name,))
+            if name in self.definitions or name in local:
+                if len(args)!=1:raise ExpressionError('A distribution function needs one coordinate.')
+                result=probability.call(self.evaluate(node.func,local,stack),args[0])
+                return np.asarray(result).view(DataColumn) if isinstance(args[0],DataColumn) and np.ndim(result)==1 else result
             raise ExpressionError(f'Unknown function: {name}')
         if isinstance(node,ast.Subscript):
             a=self.evaluate(node.value,local,stack)
@@ -281,10 +328,10 @@ class Calculator:
             raise ExpressionError('The sum/product index must be an unreserved variable name, such as k.')
         def limit(tree):
             value=np.asarray(self.evaluate(tree,local,stack))
-            if value.ndim or np.iscomplexobj(value) and value.imag!=0 or not np.isfinite(value) or abs(value)>1e6 or float(value.real)!=int(value.real):
-                raise ExpressionError('Sum/product bounds must be integers within ±1,000,000.')
-            return int(value.real)
-        start,end=limit(lower),limit(upper)
+            if value.ndim or np.iscomplexobj(value) and value.imag!=0 or not np.isfinite(value) or abs(value)>1e6:
+                raise ExpressionError('Sum/product bounds must be finite real numbers within ±1,000,000.')
+            return float(value.real)
+        start,end=int(np.ceil(limit(lower))),int(np.floor(limit(upper)))
         if end-start+1>10000:raise ExpressionError('Limit sums and products to 10,000 terms.')
         product=node.func.id in ('product','prod');result=1 if product else 0;shape=None
         for index in range(start,end+1):
@@ -307,6 +354,9 @@ class Calculator:
             derivative=ast.Call(func=ast.Name(id='diff'),args=[call,variable,node.args[1],node.args[2] if len(node.args)==3 else ast.Constant(value=1)],keywords=[])
             return self.evaluate_calculus(derivative,local,stack)
         if name in MULTIVARIABLE or name == 'at':return self.evaluate_multivariable(node,local,stack)
+        if name in ('integrate','integral'):
+            node=self.expand_integral(node)
+            if self.integral_chain(node)[1]:return self.evaluate_multiple_integral(node,local,stack)
         derivative=name in ('diff','derivative')
         primitive=name=='antiderivative'
         if len(node.args) not in ((2,3,4,5) if derivative else (2,3) if primitive else (4,5,6)):
@@ -347,6 +397,85 @@ class Calculator:
             return matrix(result) if matrix_output and result.ndim==2 else result
         finally:
             self.calculus_depth-=1
+
+    def expand_integral(self,node):
+        """List syntax lists variables/bounds in differential (inner-first) order."""
+        if len(node.args)>=2 and isinstance(node.args[1],(ast.List,ast.Tuple)):
+            if len(node.args) not in (4,5,6):raise ExpressionError('Use integrate(expression, [x,y], [lower_x,lower_y], [upper_x,upper_y]).')
+            variables,lower,upper=node.args[1:4]
+            if not 1<=len(variables.elts)<=3 or not all(isinstance(v,ast.Name) for v in variables.elts):
+                raise ExpressionError('Use one to three named integration variables, innermost first.')
+            if len({v.id for v in variables.elts})!=len(variables.elts):raise ExpressionError('Integration variables must be distinct in list syntax.')
+            if not all(isinstance(v,(ast.List,ast.Tuple)) and len(v.elts)==len(variables.elts) for v in (lower,upper)):
+                raise ExpressionError('Supply one lower and upper bound per integration variable.')
+            body=node.args[0]
+            for variable,lo,hi in zip(variables.elts,lower.elts,upper.elts):
+                body=ast.Call(func=ast.Name(id='integrate'),args=[body,variable,lo,hi,*node.args[4:]],keywords=[])
+            return body
+        return node
+
+    def integral_chain(self,node):
+        chain=[]
+        while isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in ('integrate','integral') and len(node.args) in (4,5,6):
+            node=self.expand_integral(node)
+            chain.append(node);node=node.args[0]
+        return node,chain if len(chain)>1 else []
+
+    def evaluate_multiple_integral(self,node,local,stack):
+        expression,chain=self.integral_chain(node)
+        dimensions=len(chain)
+        if self.calculus_depth+dimensions>3:raise ExpressionError('Limit nested calculus to three operations.')
+        variables=[]
+        for call in chain:
+            variable=call.args[1]
+            if not isinstance(variable,ast.Name) or variable.id in CONSTANTS or variable.id in FUNCTIONS or variable.id in CALCULUS:
+                raise ExpressionError('Integration variables must be unreserved variable names.')
+            variables.append(variable.id)
+        def context(point):return {**local,**dict(zip(variables,point))}
+        bounds=[lambda point,call=call:(self.evaluate(call.args[2],context(point),stack),self.evaluate(call.args[3],context(point),stack)) for call in chain]
+        # The outer operation controls the multidimensional error estimate.
+        abs_tol=self.evaluate(node.args[4],local,stack) if len(node.args)>=5 else 1e-8
+        rel_tol=self.evaluate(node.args[5],local,stack) if len(node.args)>=6 else 1e-7
+        # Validate inner tolerances, even though the fused rule uses the strictest.
+        for call in chain[1:]:
+            for index in (4,5):
+                if len(call.args)>index:
+                    value=self.evaluate(call.args[index],local,stack)
+                    if np.ndim(value) or np.iscomplexobj(value) or not np.isfinite(value) or not (1e-12 if index==4 else 0)<=value<=1:
+                        raise ExpressionError('Multiple-integral tolerances must be finite real constants within the supported range.')
+                    if index==4:abs_tol=min(abs_tol,value)
+                    else:rel_tol=min(rel_tol,value)
+        self.calculus_depth+=dimensions
+        try:
+            result,diagnostics=integrate_multiple(lambda point:self.evaluate(expression,context(point),stack),bounds,abs_tol,rel_tol)
+            diagnostics['variables']=list(reversed(variables))
+            self.calculus_diagnostics.append(diagnostics)
+            if len(self.calculus_diagnostics)>20:self.calculus_diagnostics.pop(0)
+            if result.ndim==2:return matrix(result)
+            if result.ndim==1:return result.view(VectorValue)
+            return result
+        finally:self.calculus_depth-=dimensions
+
+    def returns_distribution(self,node,seen=frozenset()):
+        if isinstance(node,ast.Name) and node.id in self.definitions and node.id not in seen:
+            return self.returns_distribution(self.definitions[node.id],seen|{node.id})
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+            name=node.func.id
+            if name in set(probability.ALIASES)|set(probability.ALIASES.values()):return True
+            if name in self.functions and name not in seen:return self.returns_distribution(self.functions[name][1],seen|{name})
+        return False
+
+    def contains_multiple_integrals(self,node,seen=frozenset(),depth=0):
+        if isinstance(node,ast.Name) and node.id in self.definitions and node.id not in seen:
+            return self.contains_multiple_integrals(self.definitions[node.id],seen|{node.id},depth)
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+            name=node.func.id
+            if name in ('integrate','integral','antiderivative'):
+                if depth or len(node.args)>1 and isinstance(node.args[1],(ast.List,ast.Tuple)):return True
+                depth+=1
+            if name in self.functions and name not in seen:
+                if self.contains_multiple_integrals(self.functions[name][1],seen|{name},depth):return True
+        return any(self.contains_multiple_integrals(child,seen,depth) for child in ast.iter_child_nodes(node))
 
     def calculus_variables(self, node):
         if not isinstance(node, (ast.List, ast.Tuple)) or not node.elts:
@@ -404,6 +533,8 @@ class Calculator:
             return set()
         if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
             name=node.func.id
+            if name in ('integrate','integral') and len(node.args)>1 and isinstance(node.args[1],(ast.List,ast.Tuple)):
+                return self.free_names(self.expand_integral(node),bound,seen)
             if name=='prime':
                 names=set()
                 for arg in node.args[1:]:names|=self.free_names(arg,bound,seen)
@@ -442,12 +573,14 @@ class Calculator:
 
     def needs_pointwise(self, node, seen=frozenset()):
         """Array entries are algebraic axes, never graph-coordinate axes."""
+        if self.contains_multiple_integrals(node):return True
         if isinstance(node, (ast.List, ast.Tuple)):
             return True
         if isinstance(node, ast.Name) and node.id in self.definitions and node.id not in seen:
             return self.needs_pointwise(self.definitions[node.id], seen | {node.id})
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             name = node.func.id
+            if name in probability.ALIASES and any(isinstance(child,ast.Name) and child.id not in CONSTANTS for arg in node.args for child in ast.walk(arg)):return True
             if name in ALGEBRAIC_FUNCTIONS | {'summation','product','prod','quartile','quantile','stdev','stdevp','var','varp','cov','covp','mad','corr','spearman','stats','total','min','max','mexican_hat','morlet','haar','normal','poisson','binomial','boltzmann','uniform','exponential','geometric','norm', 'inner', 'det', 'trace', 'rank', 'sum', 'mean', 'ishermitian', 'isunitary'}:
                 return True
             if name in self.functions and name not in seen:
@@ -501,16 +634,14 @@ class Calculator:
         domain = domain and item['kind'] == 'function' and not surface
         grid = surface or domain
         grid_size = 32 if self.contains_calculus(tree) else 60
-        xs = np.linspace(xmin, xmax, grid_size) if grid else np.linspace(*(curve_range or [xmin, xmax]), 1000)
-        ys = np.linspace(ymin, ymax, grid_size) if grid else None
-        coordinates = ((a, b) for b in ys for a in xs) if grid else ((a, None) for a in xs)
-        count = len(xs) * (len(ys) if grid else 1)
+        ranges = [[xmin, xmax], [ymin, ymax]] if grid else [curve_range or [xmin, xmax]]
         output_shape = None
-        samples = None
         first_error = None
-        total_steps = 0
-        for index, (a, b) in enumerate(coordinates):
-            self.steps = 0
+        indices = None
+        selected = 'all'
+
+        def evaluate_point(a, b=None):
+            nonlocal output_shape, first_error, indices, selected
             local = {**item.get('fixed', {}), params[0]: complex(a, b) if domain else a}
             if surface: local[params[1]] = b
             try:
@@ -520,11 +651,7 @@ class Calculator:
                 if isinstance(exc, ExpressionError):
                     raise
                 first_error = first_error or str(exc)
-                value = None
-            total_steps += self.steps
-            if total_steps > 2000000:
-                raise ExpressionError('Function sampling limit reached; simplify the formula or plot a simpler component.')
-            if value is None: continue
+                return None
             if value.ndim > 2 or not value.size or (value.ndim and max(value.shape) > MAX_MATRIX):
                 raise ExpressionError('Each function output must be a scalar, a vector up to 32 entries, or a matrix up to 32×32.')
             if output_shape is None:
@@ -532,12 +659,16 @@ class Calculator:
                 size = value.size
                 selected = selection if type(selection) is int and 0 <= selection < size else 'all'
                 indices = [selected] if selected != 'all' else list(range(min(size, 1 if grid else 8)))
-                samples = np.full((len(indices), count), np.nan, dtype=complex)
             elif value.shape != output_shape:
                 raise ExpressionError('Function output shape changes across the input range; use a fixed-size vector or matrix.')
-            samples[:, index] = value.reshape(-1)[indices]
+            return value.reshape(-1)[indices]
+
+        axes, values, sampling = sample_grid(self, evaluate_point, ranges, grid_size if grid else 1000, 2000000)
+        xs = axes[0]
+        ys = axes[1] if grid else None
         if output_shape is None:
             raise ExpressionError(first_error or 'Function is undefined throughout this input range.')
+        samples = np.asarray([v if v is not None else np.full(len(indices), complex(np.nan, np.nan)) for v in values]).T
         components = []
         for k, flat_index in enumerate(indices):
             value = samples[k].reshape((len(ys), len(xs)) if grid else (len(xs),))
@@ -558,23 +689,51 @@ class Calculator:
                 result.update(index=flat_index, label='[' + ', '.join(str(i) for i in entry) + ']')
             components.append(result)
         out = dict(components[0])
-        out.update(name=item.get('name'), parameters=list(params if surface else params[:1]))
+        out.update(name=item.get('name'), parameters=list(params if surface else params[:1]), sampling=sampling)
         if output_shape:
             out.update(shape=list(output_shape), components=components, component_count=int(np.prod(output_shape)),
                        selected_component=selected, sampled_pointwise=True)
         return out
 
-    def run(self,bounds,complex_domain=False,curve_range=None):
+    def metadata(self, indices=None):
+        """Definition syntax/name checks without numeric evaluation or sampling."""
+        selected = range(len(self.items)) if indices is None else indices
+        results=[]
+        for index in selected:
+            if type(index) is not int or not 0<=index<len(self.items):
+                raise ExpressionError('Row indices must refer to existing worksheet rows.')
+            item=self.items[index]
+            out={'text':item['text'],'kind':item['kind']}
+            if item.get('error'):out['error']=item['error']
+            if item['kind']=='function':
+                out['function']={'name':item['name'],'parameters':list(item['params']),'body':item['body']}
+            if item.get('tree') is None and item['kind']!='note' and not item.get('error'):out['kind']='empty'
+            results.append(out)
+        return results
+
+    def run(self,bounds,complex_domain=False,curve_range=None,indices=None):
+        # Parse the whole worksheet once, but sample only the requested rows.
+        # Dependencies are resolved from definitions, never from previous plots.
+        selected = list(range(len(self.items))) if indices is None else list(indices)
+        if any(type(index) is not int or not 0 <= index < len(self.items) for index in selected):
+            raise ExpressionError('Row indices must refer to existing worksheet rows.')
+        if len(selected) > len(self.items) or len(set(selected)) != len(selected):
+            raise ExpressionError('Row indices must be unique.')
+        self.check_cancelled()
         xmin,xmax,ymin,ymax=bounds
         x=np.linspace(*(curve_range or [xmin,xmax]),1000)
         gx=np.linspace(xmin,xmax,180);gy=np.linspace(ymin,ymax,180)
         xx,yy=np.meshgrid(gx,gy)
         results=[]
-        for row_index, item in enumerate(self.items):
+        for row_index in selected:
+            self.check_cancelled()
+            item = self.items[row_index]
             self.steps=0
             self.calculus_diagnostics=[]
             self.calculus_depth=0
             out={'text':item['text'],'kind':item['kind']}
+            if item['kind']=='note':
+                results.append(out);continue
             if item['kind']=='function':out['function']={'name':item['name'],'parameters':list(item['params']),'body':item['body']}
             if item.get('error'):
                 results.append({**out,'error':item['error']});continue
@@ -589,6 +748,9 @@ class Calculator:
                     if current_point and variable not in ('x','y') and not names and variable not in self.definitions and variable not in self.dataset_values and variable not in CONSTANTS:
                         item={**item,'kind':'function','params':(variable,)};kind='function';out['plot_parameters']=[variable]
 
+                if kind=='function' and self.returns_distribution(tree):
+                    out.update(kind='distribution_function',name=item.get('name'))
+                    results.append(out);continue
                 if kind=='function':
                     names=self.free_names(tree,frozenset(item['params']))|{'x'}
                     plot_slice = self.function_slice(item, self.rows[row_index].get('plot_slice'))
@@ -662,6 +824,8 @@ class Calculator:
                         info=quantum.quantum_info(a)
                         if info is not None:out['quantum']=info
                     if kind=='definition':out['name']=item['name']
+            except ComputationCancelled:
+                raise
             except (Exception,RecursionError) as exc:
                 out['error']=str(exc) or type(exc).__name__
             if self.calculus_diagnostics:out['calculus']=self.calculus_diagnostics

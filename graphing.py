@@ -4,6 +4,7 @@ import re
 import numpy as np
 from engine import Calculator, parse, ExpressionError, FUNCTIONS, CONSTANTS, CALCULUS
 from notation import normalize_notation
+from sampling import sample_grid
 
 TYPES = {'function', 'parametric', 'polar', 'parametric3d', 'implicit', 'surface', 'contour', 'scatter', 'line', 'bar', 'histogram', 'probability'}
 GRID_TYPES = {'implicit', 'surface', 'contour'}
@@ -118,19 +119,24 @@ def sample_graph(c, g):
             elif len(sides) > 2: raise ExpressionError('Use a single equality for an implicit curve.')
         tree = parse(source)
         count = 32 if c.contains_calculus(tree) else 60
-        xs, ys = np.linspace(*g['range'], count), np.linspace(*g['yrange'], count)
-        z = [[s.point(tree, {'x': float(x), 'y': float(y)}) for x in xs] for y in ys]
+        axes, values, sampling = sample_grid(c, lambda x, y: s.point(tree, {'x': x, 'y': y}),
+                                             [g['range'], g['yrange']], count, 500000)
+        xs, ys = axes
+        count = len(xs)
+        z = [values[k:k+count] for k in range(0, len(values), count)]
         valid = sum(v is not None for row in z for v in row)
         if not valid: raise ExpressionError('No finite real samples in this range. Choose another range or use real(...), imag(...), or abs(...).')
-        out.update(x=xs.tolist(), y=ys.tolist(), z=z, gaps=count*count-valid)
+        out.update(x=xs.tolist(), y=ys.tolist(), z=z, gaps=count*count-valid, sampling=sampling)
         return out
     p = 'x' if kind == 'function' else g['parameter']
     fields = {'function': ['y'], 'parametric': ['x','y'], 'parametric3d': ['x','y','z'], 'polar': ['r']}[kind]
     trees = {field: parse(g[field]) for field in fields}
-    ts = np.linspace(*g['range'], g['samples']); coords = {key: [] for key in (['x','y','z'] if kind == 'parametric3d' else ['x','y'])}
+    axes, sampled, sampling = sample_grid(c, lambda t: {field: s.point(tree, {p: t}) for field, tree in trees.items()},
+                                         [g['range']], g['samples'], 500000)
+    ts = axes[0]
+    coords = {key: [] for key in (['x','y','z'] if kind == 'parametric3d' else ['x','y'])}
     gaps = 0
-    for t in ts:
-        values = {field: s.point(tree, {p: float(t)}) for field, tree in trees.items()}
+    for t, values in zip(ts, sampled):
         if any(v is None for v in values.values()):
             for series in coords.values(): series.append(None)
             gaps += 1
@@ -139,7 +145,7 @@ def sample_graph(c, g):
         if kind == 'polar': values = {'x': values['r']*float(np.cos(t)), 'y': values['r']*float(np.sin(t))}
         for key in coords: coords[key].append(values[key])
     if gaps == len(ts): raise ExpressionError('No finite real samples in this range. Choose another range or use real(...), imag(...), or abs(...).')
-    out.update(**coords, parameter=ts.tolist(), gaps=gaps)
+    out.update(**coords, parameter=ts.tolist(), gaps=gaps, sampling=sampling)
     return out
 
 

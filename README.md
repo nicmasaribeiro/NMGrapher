@@ -15,13 +15,15 @@ Open **http://127.0.0.1:5000** in your browser.
 
 For Spyder, CodeRunner, PyCharm, or another IDE, install the requirements into the IDE's Python environment, open `app.py`, and run it normally. No command-line arguments are needed. Keep the script running while you use the browser. If port 5000 is occupied, change `port=5000` to `port=5001` at the bottom of `app.py` and open the corresponding address.
 
-This version adds PyWavelets. When upgrading, rerun `python -m pip install -r requirements.txt` in the same Python environment used to run `app.py`.
+The runtime includes PyWavelets for signal analysis and threadpoolctl to keep native numerical threads bounded during parallel computation. When upgrading, rerun `python -m pip install -r requirements.txt` in the same Python environment used to run `app.py`.
 
 The frontend and Plotly are served locally; there are no CDN, API key, Node.js, or build-tool requirements. Installing Python dependencies requires internet access unless they are already installed.
 
 ## Workspace
 
 Choose **Light** or **Dark** from the header’s **Theme** selector. Drag an equation using its **⋮⋮** handle to change its position.
+
+Function previews update independently of calculations. Completed equations and graphs appear as they finish; the worksheet footer shows progress and a **Stop** button. Existing results stay visible while replacements are calculated.
 
 - **＋ Create graph** creates named Cartesian, parametric, polar, 3D, implicit, surface, contour, scatter, line, bar, histogram, or probability graphs. **My graphs** displays them individually or as 2D/3D overlays.
 - **ƒ Built-in functions** opens a searchable insertion palette for calculus, statistics, hyperbolic functions, wavelets, probability, and linear algebra.
@@ -101,12 +103,15 @@ For the CTMC example, the generator rows sum to zero. `t` must use the same time
 NMGrapher/
     app.py                   Flask routes and local entry point
     engine.py                Restricted numeric AST interpreter
+    async_compute.py         Bounded subprocess jobs, scheduling, cancellation
+    static/async-compute.js  Incremental job client and obsolete-request cancellation
     symbols.py               Greek alphabet and canonical glyph aliases
     notation.py              Subscript and superscript normalization
     calculus_notation.py     Integral and derivative notation parser
     math_preview.py          Safe semantic MathML preview trees
     linear_algebra.py        Eigenpairs, decompositions, subspaces, diagnostics
     graphing.py              Bounded sampling for named graphs and data charts
+    sampling.py              Progressive sampling with complete-grid fallback
     probability.py           Distributions, probability queries, seeded samples
     wavelets.py              Wavelet functions, CWT, DWT, and signal preparation
     static/wavelet-tools.js  Signal controls, validation, CSV and dataset outputs
@@ -145,7 +150,7 @@ The response has one `results` entry per expression, containing its value or sam
 
 This version supports numeric 2D curves, implicit equalities, inequalities, scalar parameters, functions with any number of named arguments, complex-plane trajectories, complex function domain maps, and matrix calculations. It does not implement Desmos's full notation, symbolic differentiation/integration, regression tables, animation playback, cloud collaboration, or arbitrary Python execution. Vector- and matrix-valued functions support scalar calls and sampled plots of their entries, including one- and two-variable definitions.
 
-Curves use 1,000 samples and implicit/inequality plots use a 180×180 grid, resampled after zooming. Non-finite curve values become gaps; a large-jump heuristic also breaks common poles. This does not guarantee detection of every discontinuity or very small feature. Heatmaps and matrix results are numerical, not exact symbolic calculations.
+Curves target 1,000 samples (expensive pointwise formulas may use fewer) and implicit/inequality plots use a 180×180 grid, resampled after zooming. Non-finite curve values become gaps; a large-jump heuristic also breaks common poles. This does not guarantee detection of every discontinuity or very small feature. Heatmaps and matrix results are numerical, not exact symbolic calculations.
 
 Limits: 40 rows per worksheet, 1,200 characters and 300 syntax nodes per expression, matrix dimensions up to 32×32, and 2 MB per request. The visual matrix editor supports up to 12×12; larger matrices can be typed. Circular definitions, unknown names, incompatible shapes, and unsupported syntax produce row-level errors.
 
@@ -245,7 +250,7 @@ Glyph variants are canonical aliases, so defining both an alias and its canonica
 | ϕ | φ |
 | ϴ | Θ |
 
-Verification after the resident-functions, transforms, and graph-naming upgrade: **300 backend/API tests passed**. Checks cover the displayed statistics, hyperbolic functions, custom logarithm bases, prime derivatives, bounded sums/products, local index binding, Greek name compatibility, wavelet transform objects and inverses, imported signal reuse, and prior regressions. Node checks passed for palette coverage/insertion/search, graph names and titles, and the prior graph, wavelet, preview, calculus, dataset, and Greek controls. Frontend JavaScript syntax, Flask homepage rendering, and static UI targets were checked. Browser interaction and visual rendering were not tested.
+Verification after the document-calculus upgrade: the complete 339-test backend/API suite passed, followed by 31 passing document-focused tests (including two added cases), for 341 verified backend/API tests in total. Checks include all twelve document expressions, independent quadrature comparisons, dependent integration bounds, triple integrals, vector/matrix outputs, method restrictions, and formatted previews. New regression checks reproduce the former sampling failure and verify reduced curves, complex vector integrals, matrix surfaces, saved graphs, coordinate reuse, full-domain coverage, budget enforcement, and error isolation. Checks cover the displayed statistics, hyperbolic functions, custom logarithm bases, prime derivatives, bounded sums/products, local index binding, Greek name compatibility, wavelet transform objects and inverses, imported signal reuse, and prior regressions. Node checks passed for palette coverage/insertion/search, graph names and titles, and the prior graph, wavelet, preview, calculus, dataset, and Greek controls. Frontend JavaScript syntax, Flask homepage rendering, and static UI targets were checked. Browser interaction and visual rendering were not tested.
 
 
 ## Two-variable functions and formatted notation
@@ -264,7 +269,7 @@ g(t) = f_1(t, 0)
 4. Choose the output component: real, imaginary, magnitude, or phase. Input axes follow the plot-input selection, initially the argument order. Two-variable surfaces sample *real* arguments; they do not represent a four-dimensional domain of two complex inputs.
 5. Use `f_1(1, 2)` for a point calculation, `f_1(x, 0)` for a curve, or `(f_1(x,y)) = 0` for an implicit level set. Parentheses disambiguate the last expression from a function definition. Writing `f_1(x,y) = 0` by itself means a function definition and reports a duplicate if that function already exists.
 
-In **Graph**, two-variable function definitions and bare expressions involving both graph coordinates appear as real-part level curves. **Surface** displays one selected field at a time; its component selector also supports complex-valued outputs. Scalar surface sampling uses a 180×180 grid (60×60 for vector/matrix operations, or 32×32 for array-dependent calculus), with non-finite values left as gaps. Zooming/rotating the camera does not change the input domain; use the Input range controls to resample.
+In **Graph**, two-variable function definitions and bare expressions involving both graph coordinates appear as real-part level curves. **Surface** displays one selected field at a time; its component selector also supports complex-valued outputs. Scalar surface sampling uses a 180×180 grid (up to 60×60 for vector/matrix operations, or 32×32 for array-dependent calculus), with non-finite values left as gaps. Zooming/rotating the camera does not change the input domain; use the Input range controls to resample.
 
 One-argument functions retain their original curve and complex-domain behavior. Every function call must supply exactly its declared number of inputs. Inputs can be scalar, complex, or matrix values when used in ordinary numeric calls. Automatic previews accept fixed-size scalar, vector, or matrix outputs at each input point. Functions that require matrix inputs may still show a scalar-input preview error while explicitly supplied matrix calls evaluate.
 
@@ -484,7 +489,7 @@ A function infers its output shape from its formula. References, complex coeffic
 
 Each sampled vector/matrix function displays a **plot entry** selector below its equation. Indices start at zero: `[0]` is the first vector entry and `[0, 1]` is matrix row zero, column one. Graph and Complex plane show all entries up to eight by default; larger outputs show the first eight. Select any individual entry, including entries beyond the initial eight. Plot legends identify the equation and entry; real and imaginary graph curves use solid and dashed lines. Two-variable Surface and complex Domain map display one selected entry at a time. Their Real/Imaginary/Magnitude/Phase selector controls the selected entry's complex component. Saved worksheets preserve entry selection.
 
-Vector/matrix expressions are evaluated at scalar coordinates, keeping graph samples separate from algebraic dimensions. Curves use 1,000 points; array-dependent surfaces and domain maps use a 60×60 grid, reduced to 32×32 when calculus is involved. Scalar-only functions keep their faster vectorized sampler. Outputs must have a fixed shape throughout the sampled range: up to 32 vector entries or 32×32 matrix entries. Sampling has a two-million evaluation-node budget per row in addition to the per-point interpreter limit. Expensive composed functions can reach this limit. Invalid numeric values create gaps; shape changes and structural expression errors are reported on the row. Function component plots do not represent a geometric vector field or animate a Bloch sphere.
+Vector/matrix expressions are evaluated at scalar coordinates, keeping graph samples separate from algebraic dimensions. Curves target 1,000 points; array-dependent surfaces and domain maps target a 60×60 grid, or 32×32 when calculus is involved. Scalar-only functions keep their faster vectorized sampler. Outputs must have a fixed shape throughout the sampled range: up to 32 vector entries or 32×32 matrix entries. Sampling has a two-million evaluation-node budget per row in addition to the per-point interpreter limit. The sampler first completes a coarse plot spanning the full input range, then refines it while reusing sampled coordinates. If it reaches the budget, it returns the last complete curve/grid with a **Reduced plot detail** notice instead of discarding the graph. The notice reports the actual resolution. Narrow the input range to inspect fine features; reduced sampling can miss oscillations or narrow peaks. A 50,000-node per-point limit applies to ordinary expressions (500,000 for multiple-integral expressions), and formulas that exceed it produce an evaluation error. Invalid numeric values create gaps; shape changes and structural expression errors are reported on the row. Function component plots do not represent a geometric vector field or animate a Bloch sphere.
 
 The **Vector & matrix functions** example reproduces the previously failing `Φ_1(t) = φ_1 * w(t)` expression and demonstrates a rotating vector.
 
@@ -600,7 +605,7 @@ Diagnostics include the most recent operation, selected variables, estimated err
 
 `integrate` now optionally accepts absolute and relative tolerances after the upper bound. Defaults remain `1e-8` and `1e-7`. Absolute tolerance must lie between `1e-12` and `1`, and relative tolerance between `0` and `1`. Integration still requires finite real bounds and uses adaptive quadrature, including for complex and array outputs. Nested integrals can express multiple integrals within the existing depth and evaluation budgets; there is no automatic improper-integral or singularity-splitting solver.
 
-Plots involving array-dependent calculus use a 32×32 surface/domain grid and 1,000 curve samples. Other sampling resolutions are unchanged. Existing row budgets and a maximum of three nested numerical calculus operations remain in force; `at` is a local binding operation and does not add a numerical nesting level. Large Hessian fields or nested integrals may exceed the sampling budget; evaluate at a point or reduce the expression. This studio does not add symbolic differentiation, symbolic antiderivatives, or arbitrary-order derivative stencils.
+Plots involving array-dependent calculus target a 32×32 surface/domain grid and 1,000 curve samples, with automatic resolution reduction for expensive formulas. Existing row budgets and a maximum of three nested numerical calculus operations remain in force; `at` is a local binding operation and does not add a numerical nesting level. Large Hessian fields or nested integrals may render at lower resolution. If even a single point exceeds the interpreter limit, simplify the expression or use a narrower integration interval. This studio does not add symbolic differentiation, symbolic antiderivatives, or arbitrary-order derivative stencils.
 
 Run `python -m pytest -q`, `node tests/test_calculus_editor.js`, and `node tests/test_greek_input.js` for the supplied checks. Browser interaction and visual rendering were not tested in this environment.
 
@@ -804,7 +809,7 @@ Pan/zoom in My graphs changes the viewing range. Edit a graph to change its samp
 
 Data charts accept numeric vectors or dataset columns, including transformed columns. Leave X blank to use zero-based row indices. Line charts preserve input order. Missing X/Y observations are omitted together; line gaps remain gaps. Histograms omit non-finite observations and report their count. Bar-chart X values are numeric; category-string axes are not part of this version.
 
-Graphs support 12 saved definitions, 50–1,000 samples per curve, 60×60 grids (32×32 for calculus), 1–100 histogram bins, and up to 10,000 data observations. Each graph has a 500,000 interpreter-node sampling budget plus the existing per-evaluation budget. Non-finite or non-real curve/grid samples create gaps; select `real(...)`, `imag(...)`, or `abs(...)` explicitly for complex outputs. Sampling does not guarantee detection of every pole or narrow feature; a line can bridge a discontinuity between finite samples.
+Graphs support 12 saved definitions, requested resolutions of 50–1,000 samples per curve, grids up to 60×60 (32×32 for calculus), 1–100 histogram bins, and up to 10,000 data observations. Each graph has a 500,000 interpreter-node sampling budget plus the existing per-evaluation budget. Formula graphs use progressive sampling and retain a complete lower-resolution curve/grid when the sampling budget runs out; **My graphs** displays the actual reduced resolution. Saved requested sample counts remain unchanged. Imported data and discrete probability masses are not downsampled by this fallback. Non-finite or non-real curve/grid samples create gaps; select `real(...)`, `imag(...)`, or `abs(...)` explicitly for complex outputs. Sampling does not guarantee detection of every pole or narrow feature; a line can bridge a discontinuity between finite samples.
 
 `POST /api/graphs` accepts `graphs`, worksheet `expressions`, and `datasets`. Each result is keyed by graph `id`; formula errors are isolated per graph, while invalid specification structure returns HTTP 400. For example:
 
@@ -1104,7 +1109,7 @@ S(x) = sum(x^k,k,0,5)
 
 The first two results are 30 and 24. Bounds are inclusive integers; the index is local and does not overwrite a same-named worksheet variable. Use an unreserved index such as k or n; i and j remain imaginary-unit constants. Parenthesize the operand in displayed ∑/∏ notation. Uppercase Greek Σ/Π also act as bounded operators when followed by an index assignment, while names such as `Σ_1` and `Π_1` remain ordinary variables.
 
-Each reduction is limited to 10,000 terms, integer bounds within ±1,000,000, and the existing evaluation budgets. Reversed bounds give an empty sum of 0 or empty product of 1. Terms must have a consistent shape. Products preserve worksheet multiplication semantics: scalar multiplication, entrywise vector multiplication, and ordered matrix multiplication. `product(L)` / `prod(L)` with one input instead multiply its numeric entries. Formatted previews display sum/product bounds, prime marks, and logarithm bases.
+Each reduction is limited to 10,000 terms, finite real bounds within ±1,000,000 (indices run from ceil(lower) through floor(upper)), and the existing evaluation budgets. Reversed bounds give an empty sum of 0 or empty product of 1. Terms must have a consistent shape. Products preserve worksheet multiplication semantics: scalar multiplication, entrywise vector multiplication, and ordered matrix multiplication. `product(L)` / `prod(L)` with one input instead multiply its numeric entries. Formatted previews display sum/product bounds, prime marks, and logarithm bases.
 
 ## Resident wavelet transforms
 
@@ -1148,3 +1153,274 @@ Transform objects are kept in the evaluated worksheet context. Worksheet files s
 - **Equation graphs:** fill in **Plot name** below a plotted equation or function. This labels the graph independently of its mathematical variable/function name. Curve legends, surface/domain selectors, and applicable plot titles use that label. Clear the field to return to automatic labeling.
 
 Names are included in **Save worksheet** and browser autosave, alongside graph definitions and settings. Renaming changes the label without changing the equation or its numeric results. Earlier worksheets without plot names remain compatible.
+
+## Desmos document: multiple integrals and distribution functions
+
+Choose **Examples → Desmos document: multiple integrals** to load all twelve
+numbered expressions from the supplied *Demo | Desmos.pdf*. The same worksheet
+is available as `examples/desmos_demo.json` for **Open worksheet**. The initial
+input range is 0 to 0.75, where both wavelet denominators in the logarithmic
+integrals are positive. Bounds remain editable.
+
+These expressions now work directly:
+
+```text
+f_0(x) = (1-x^2)*exp(-x^2/2)
+f_1(x) = (1-(x^3-3x^2*(1-x))^2)*exp(-(x^3-3x^2*(1-x))^2/2)
+F(x,y) = f_0(x)*f_1(y)
+g(θ,φ) = ∫_{0}^{θ} ∫_{0}^{φ} F(x,y) dydx
+d_x(x,y) = d/dx F(x,y)
+N(x) = normaldist(0,1).pdf(x)
+p_t(t,N) = ∏_{n=1}^{N} f_0(t)
+d/dx ∑_{n=1}^{3} f_0(x)
+c_0(t) = ∫_{0}^{t} ∫_{0}^{t} p_t(x,y) dxdy
+c_0(1)
+```
+
+Line 9's product repeats the same factor: for an integer N ≥ 1,
+`p_t(t,N) = f_0(t)^N`. Line 10 equals `3*f_0'(x)` because its summand is independent
+of n. Indices are local to the sum/product and do not overwrite worksheet names.
+Numeric implicit multiplication such as `3x^2`, and adjacency such as
+`N(x) log10(...)`, are supported. Use `*` for other implicit products. Without
+parentheses, a sum, product, or derivative operand extends to the next outer
+comma or closing delimiter; parenthesize the operand to specify a smaller scope.
+
+**Real product/sum limits:** NMGrapher includes the integer indices from
+`ceil(lower)` through `floor(upper)`. Empty sums equal 0; empty products equal 1.
+This explicitly defines the real-parameter extension needed by line 11. It is
+a stepwise extension, not a fractional product or a claim about Desmos's
+undocumented rounding conventions. Consequently `c_0(1)=1`, and
+`c_0(2)=2+2*exp(-2)` under this rule. Bounds are finite real scalars within
+±1,000,000, with at most 10,000 terms.
+
+### Double and triple integration
+
+The differential closest to the integrand is integrated first:
+
+```text
+∫_0^1 ∫_0^y (x+y) dxdy
+integrate(x+y, [x,y], [0,0], [y,1])
+```
+
+Both evaluate to 0.5. List variables and corresponding lower/upper bounds are
+in **innermost-first** order. Inner bounds may depend on outer coordinates.
+The outer bounds may use remaining function parameters or worksheet constants.
+Use distinct variables in list syntax. Ordinary nested notation also respects
+shadowing when a dummy variable is reused.
+
+```text
+T(t) = integrate(x+y, [x,y], [0,0], [y,t])
+integrate(1, [x,y,z], [0,0,0], [y,z,1])
+∫_0^1 ∫_0^1 ∫_0^1 (x+i*y+z) dzdydx
+```
+
+The second example has value 1/6. Complex, vector, and matrix integrands retain
+their output shape. Reversing one interval reverses the integral's sign.
+
+In **∫ Calculus**, choose **Double / triple integral**, include all dummy
+variables and parameters in **Function arguments**, and select two or three
+integration variables. Their order follows the argument list. Enter a lower
+and upper bound for each selected variable. Unselected arguments become the
+parameters of the result function. **Evaluate at point** and the formatted
+preview work with the generated integral. The built-in function palette also
+has double and triple integral templates.
+
+Consecutive definite integrals use adaptive tensor Gauss quadrature on a mapped
+unit square/cube. The calculator compares order-8 and order-12 rules, subdivides
+regions with the largest estimated error, and reports evaluations, dimensions,
+and estimated error. This estimate is numerical, not a rigorous guarantee for
+arbitrary discontinuous or highly oscillatory functions. Split difficult regions
+at known singularities or discontinuities. Explicit tolerances on a fused chain
+must be independent of its dummy coordinates; the strictest supplied tolerances
+are used. Omitted tolerances default to absolute 1e-8 and relative 1e-7 at the
+outer operation.
+
+At most three nested calculus operations are supported, including derivatives
+around integrals. Multiple-integral expressions receive a bounded 500,000-node
+per-point budget; ordinary expressions retain 50,000. The existing two-million
+worksheet-plot and 500,000 saved-graph sampling budgets still apply. Expensive
+plots can return a complete lower-resolution grid with a notice. Finite real
+bounds are required; infinite intervals and symbolic antiderivatives are not
+part of this feature.
+
+### Distributions as functions
+
+```text
+D = normaldist(0,1)
+N(x) = D.pdf(x)
+D(x)
+D.cdf(x)
+D.cdf(-1,1)
+D.inversecdf(0.975)
+D.mean
+D.stdev()
+family(m,s) = normaldist(m,s)
+f(x) = family(x,1).pdf(0)
+∫_0^1 D(x) dx
+```
+
+A distribution-valued definition such as `family(m,s)` is retained as a reusable
+factory; it is shown with an explanatory label instead of attempting to graph
+an object as a number. A named continuous distribution called as `D(x)` returns
+its density. For discrete D, `D(k)` returns the exact PMF (zero between integer
+outcomes). Distribution methods work inside user functions, derivatives,
+integrals, and dataset expressions.
+
+| Form | Meaning |
+| --- | --- |
+| `normaldist`, `uniformdist`, `poissondist`, `binomialdist`, `geodist` | Aliases for the corresponding existing constructors |
+| `exponentialdist`, `boltzmanndist` | Aliases for `exponential` and `boltzmann` |
+| `D.pdf(x)` | Continuous density; discrete masses use `floor(x+0.5)` for Desmos-style nearest-integer plotting |
+| `D.pmf(k)` | Exact discrete mass, without rounding |
+| `D.cdf(x)` / `D.cdf(a,b)` | Cumulative or interval probability |
+| `D.sf(x)` | Survival probability |
+| `D.inversecdf(q)` / `D.quantile(q)` | Inverse cumulative probability |
+| `D.mean`, `.median`, `.var`, `.stdev`, `.entropy` | Distribution statistics; empty parentheses also work |
+| `D.sample(n,seed)` | Seeded observation sequence |
+
+The density/CDF method spelling follows the
+[Desmos distribution documentation](https://help.desmos.com/hc/en-us/articles/360022401451-Probability-Distributions).
+Existing `pdf(D,x)`, `pmf(D,k)`, and the original constructor names still work.
+Only the listed distribution operations are allowed; arbitrary Python attribute
+access remains unavailable.
+
+### The logarithmic integrals on lines 7 and 8
+
+The bundled example uses:
+
+```text
+i_0(t) = ∫_0^t N(x) log10(N(x)/f_0(x)) dx
+i_1(t) = ∫_0^t N(x) log10(N(x)/f_1(x)) dx
+```
+
+Desmos's plain `log` is a common logarithm; the example uses explicit `log10` to
+match that base. NMGrapher's existing one-argument `log` and `ln` remain natural
+logarithms for compatibility. See the
+[Desmos supported functions reference](https://help.desmos.com/hc/en-us/articles/212235786-Supported-Functions).
+
+These wavelet functions are signed and are not normalized probability densities.
+Their logarithmic ratios must not automatically be interpreted as KL divergence.
+Zeros produce singularities, and negative ratios may produce complex values.
+Choose an appropriate interval or change the denominator to a valid positive
+probability density if that is the intended model. The source formulas are not
+silently replaced with absolute values or normalized densities.
+
+
+## Reload the system
+
+Click **↻ Reload system** in the top toolbar. The `reloadSystem()` JavaScript
+function saves the current worksheet, cancels its pending calculation timer,
+and reloads the page. Startup restores saved equations, imported datasets,
+named graphs, and worksheet settings, then recalculates the plots. Theme and
+pane width retain their existing browser persistence. Apply editor changes
+before reloading; temporary studio results and unapplied drafts are not part
+of the saved worksheet.
+
+If browser storage cannot save the worksheet, the reload stops and displays
+an instruction to download a copy with **Save worksheet**. This button refreshes
+the application in the browser; restarting Flask after Python code updates
+still requires your IDE/server controls.
+
+Reload verification: JavaScript checks cover save-before-refresh ordering, latest edits, storage failure, and restoring an empty worksheet. Homepage markup and JavaScript syntax were checked. Browser interaction remains untested.
+
+
+## Note cells
+
+Click **＋ Note** beside **＋ Expression** to add a reminder to the equation list.
+Notes are editable plain text; Enter inserts a new line. Drag a note by its
+handle, or focus its handle and use the arrow keys, to place it beside the
+relevant formula. Use its × button to delete it.
+
+Notes autosave with the worksheet and are included in Save/Open worksheet and
+Reload system. They preserve whitespace and Greek keywords exactly as typed.
+Notes are never parsed, evaluated, or plotted, even if they contain an equation.
+Typing in a note saves it without recalculating the worksheet. Each note allows
+1,200 characters and shares the worksheet's limit of 40 cells. These are written
+reminders, without scheduled notifications.
+
+Worksheet rows now accept an optional `type` of `expression` or `note`; older
+worksheets without a type remain supported. Notes retain their positions in
+API results while being ignored in calculator and studio contexts.
+
+Note verification: three backend/API tests passed, plus JavaScript checks for
+plain-text persistence, legacy worksheet compatibility, and reload behavior.
+UI references and JavaScript syntax passed; browser interactions remain untested.
+
+
+## Asynchronous previews and parallel computation
+
+The worksheet submits background jobs and displays individual row and named-graph
+results as they arrive. A reusable process pool evaluates independent rows in
+parallel, while each worker can resolve definitions from the entire worksheet.
+Simple expressions are scheduled before expensive calculus. The first job may
+take longer while Python workers start; later jobs reuse those workers.
+
+Edits debounce for 160 ms and cancel obsolete jobs. **Stop** cancels queued work
+and asks running calculations to stop at the next checkpoint. Late results from
+old jobs cannot replace the current worksheet. Previous plots remain visible
+during calculation and after Stop; the progress label identifies pending work.
+Numerical library operations finish their current call before cancellation takes
+effect. Existing sampling and accuracy controls are preserved.
+
+Formatted previews use a separate request queue with a 25 ms batch interval,
+at most two requests in flight, shared requests for identical formulas, and a
+200-formula cache. Their prior formatted content stays visible while updating.
+Graph redraws are coalesced and serialized. Result controls remain visible when
+cells are added, and arriving results defer repainting a focused control until
+focus leaves it. Function-editor Apply validates the definition without sampling
+the worksheet; its graph loads in the background. Calculus point previews and
+qubit/distribution creation evaluate only the requested output rows.
+
+### Worker configuration and hosting
+
+Set `NMGRAPHER_WORKERS` before starting Flask to choose 1–4 processes. The default
+is the smaller of four and the available CPU count. Native BLAS/OpenMP thread
+pools are limited to one thread per process by threadpoolctl to avoid multiplying
+CPU threads. A host that cannot spawn processes falls back to at most two
+background threads and reports a notice; CPU parallelism is then limited.
+
+The default limits are four active jobs, eight retained jobs, a 180-second job
+deadline, 120-second completed-result retention, 64 MB of output per job, and
+128 MB of retained output overall. The scheduler submits at most one task per
+worker at a time and shares capacity across active jobs. These defaults can be
+changed in `JobManager` when embedding the server.
+
+Job state belongs to the Flask process. `python app.py` runs the supported local
+configuration. For WSGI hosting use **one threaded server worker**, or ensure
+sticky routing to the same server process for job creation, polling, and
+cancellation. Independent WSGI processes do not share job state. Restart Flask
+after installing this update, then use Reload system in the browser.
+
+### Background API
+
+- `POST /api/jobs`: accepts the existing evaluation payload plus optional
+  `graphs`; returns HTTP 202 with `job_id`, state, progress, worker mode, a result
+  cursor, and any immediately available results.
+- `GET /api/jobs/<job_id>?after=0`: returns new `results`, each with
+  `{kind: "row" | "graph", index, result}`, plus the next `cursor`, `completed`,
+  `total`, and state (`running`, `complete`, `cancelled`, or `error`). Reuse the
+  returned cursor on the next poll. Results retain their original input indices
+  and may arrive out of order. The browser starts polling at zero so it also
+  receives results that were ready at creation. Job responses use no-store.
+- `POST /api/jobs/<job_id>/cancel`: cancels remaining work. Completed jobs retain
+  their completed state. Expired/unknown jobs return 404; a full queue returns 429.
+- `POST /api/evaluate` remains available. Optional `indices: [2,0]` evaluates only
+  those rows, in requested order, with all definitions available.
+  `validate_only: true` returns syntax/name metadata without numerical sampling;
+  runtime mathematical errors are reported when the row is evaluated.
+
+Verification: the full backend/API suite passed 356 tests, followed by 13 passing
+async tests after the final fallback regression was added (357 tests total).
+Tests exercise real spawned worker processes, forward dependencies, incremental
+results, queue limits, cancellation, expiry, and process-failure recovery.
+All 11 JavaScript test files passed. They cover cached previews, out-of-order
+delivery, obsolete requests, cancellation during creation, bounded retries,
+retained controls, focus preservation, and serialized plot updates. Homepage
+markup, script delivery, and JavaScript syntax checks also passed. Browser interaction
+could not be checked here because the cloud browser blocked the local server.
+
+A live local HTTP check returned a formatted preview in 11 ms while a six-cell
+job was running. The initial job completed in about 2.3 seconds including four
+worker startups; a subsequent two-curve worksheet completed in 53 ms. These
+measurements cover this environment and sample worksheet, not browser paint
+time or a speed guarantee for complex integrals.

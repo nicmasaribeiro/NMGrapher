@@ -62,6 +62,12 @@ def render(node, parent=0):
         parts=[render(node.left)]
         for operation,right in zip(node.ops,node.comparators):parts.extend([op(symbols[type(operation)]),render(right)])
         return row(*parts)
+    if isinstance(node,ast.Attribute):
+        from probability import METHODS
+        if node.attr not in METHODS:raise ValueError('Unsupported distribution operation.')
+        return row(render(node.value),op('.'),name(node.attr,True))
+    if isinstance(node,ast.Call) and not isinstance(node.func,ast.Name) and not node.keywords:
+        return row(render(node.func),fenced(joined([render(a) for a in node.args])))
     if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and not node.keywords:
         function=node.func.id;args=node.args
         if function in ('sum','summation','product','prod') and len(args)==4:
@@ -73,6 +79,9 @@ def render(node, parent=0):
             return row(element('msup',render(args[0]),op('″' if order==2 else '′')),fenced(render(args[1])))
         if function=='logbase' and len(args)==2:return row(element('msub',name('log',True),render(args[1])),fenced(render(args[0])))
         if function in ('integrate','integral') and 4<=len(args)<=6:
+            if isinstance(args[1],(ast.List,ast.Tuple)):
+                from engine import Calculator
+                return render(Calculator([]).expand_integral(node),parent)
             symbol=element('msubsup',op('∫'),render(args[2]),render(args[3]))
             value=row(symbol,render(args[0]),element('mspace',width='0.2em'),name('d',True),render(args[1]))
             return fenced(value) if parent else value
