@@ -1,0 +1,288 @@
+{
+  "version": 5,
+  "rows": [
+    {
+      "id": "energy_note",
+      "type": "note",
+      "text": "Binary RBM: open Energy models, then Train model. The imported pattern columns are selected. Export under learned_model to compare with M. The contour and force graphs show a continuous relaxation of free energy; probabilities apply only to binary states.",
+      "visible": true
+    },
+    {
+      "id": "energy_0",
+      "type": "expression",
+      "text": "M=rbm([[2,-2],[2,-2]],[-1,-1],[-2,2])",
+      "visible": true,
+      "color": "#2864d7"
+    },
+    {
+      "id": "energy_1",
+      "type": "expression",
+      "text": "M([0,0])",
+      "visible": true,
+      "color": "#169582"
+    },
+    {
+      "id": "energy_2",
+      "type": "expression",
+      "text": "M([1,1])",
+      "visible": true,
+      "color": "#2864d7"
+    },
+    {
+      "id": "energy_3",
+      "type": "expression",
+      "text": "energy(M,[1,1],[1,0])",
+      "visible": true,
+      "color": "#169582"
+    },
+    {
+      "id": "energy_4",
+      "type": "expression",
+      "text": "free_energy(M,[1,1])",
+      "visible": true,
+      "color": "#2864d7"
+    },
+    {
+      "id": "energy_5",
+      "type": "expression",
+      "text": "log_partition(M)",
+      "visible": true,
+      "color": "#169582"
+    },
+    {
+      "id": "energy_6",
+      "type": "expression",
+      "text": "hidden_probabilities(M,[1,0])",
+      "visible": true,
+      "color": "#2864d7"
+    },
+    {
+      "id": "energy_7",
+      "type": "expression",
+      "text": "reconstruct(M,[1,0])",
+      "visible": true,
+      "color": "#169582"
+    },
+    {
+      "id": "energy_8",
+      "type": "expression",
+      "text": "U(r)=free_energy(M,r)",
+      "visible": true,
+      "color": "#2864d7"
+    },
+    {
+      "id": "energy_9",
+      "type": "expression",
+      "text": "F(r)=force(U,r)",
+      "visible": true,
+      "color": "#169582"
+    },
+    {
+      "id": "energy_10",
+      "type": "expression",
+      "text": "field_hessian(U,[0.2,0.7])",
+      "visible": true,
+      "color": "#2864d7"
+    }
+  ],
+  "datasets": [
+    {
+      "id": "energy_patterns",
+      "name": "patterns",
+      "columns": [
+        {
+          "name": "bit_1",
+          "values": [
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1
+          ]
+        },
+        {
+          "name": "bit_2",
+          "values": [
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1,
+            0,
+            1
+          ]
+        }
+      ],
+      "x": "bit_1",
+      "y": [
+        "bit_2"
+      ],
+      "style": "markers",
+      "visible": false
+    }
+  ],
+  "graphs": [
+    {
+      "id": "energy_contour",
+      "type": "contour",
+      "name": "RBM free energy · continuous relaxation",
+      "z": "free_energy(M,[x,y])",
+      "color": "#169582",
+      "visible": true,
+      "range": [
+        0,
+        1
+      ],
+      "yrange": [
+        0,
+        1
+      ],
+      "zrange": [
+        0,
+        1
+      ],
+      "parameter": "t",
+      "samples": 400,
+      "density": 11,
+      "normalize": false,
+      "arrow_scale": 0.8
+    },
+    {
+      "id": "energy_force",
+      "type": "vectorfield",
+      "name": "Force −∇F · continuous relaxation",
+      "expression": "F([x,y])",
+      "color": "#169582",
+      "visible": true,
+      "range": [
+        0,
+        1
+      ],
+      "yrange": [
+        0,
+        1
+      ],
+      "zrange": [
+        0,
+        1
+      ],
+      "parameter": "t",
+      "samples": 400,
+      "density": 11,
+      "normalize": false,
+      "arrow_scale": 0.8
+    }
+  ],
+  "graphSelection": "energy_contour",
+  "view": "created",
+  "component": "real",
+  "bounds": [
+    0,
+    1,
+    0,
+    1
+  ],
+  "curve_range": [
+    0,
+    1
+  ],
+  "energy_state": {
+    "model": {
+      "kind": "rbm",
+      "weights": [
+        [
+          2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          -2.0
+        ]
+      ],
+      "visible_bias": [
+        -1.0,
+        -1.0
+      ],
+      "hidden_bias": [
+        -2.0,
+        2.0
+      ],
+      "temperature": 1.0
+    },
+    "form": {
+      "energyKind": "rbm",
+      "energyVisible": "2",
+      "energyHidden": "2",
+      "energyTemperature": "1",
+      "energyName": "learned_model",
+      "energySeed": "42",
+      "energyEpochs": "500",
+      "energyRate": "0.1",
+      "energyBatch": "32",
+      "energyCD": "1",
+      "energyDecay": "0.0001",
+      "energyValidation": "0.2",
+      "energyDataMode": "columns",
+      "energyDataSource": "patterns_bit_1, patterns_bit_2",
+      "energyThreshold": "0.5",
+      "energyBinarize": false,
+      "energyWeights": "[[2.0, -2.0], [2.0, -2.0]]",
+      "energyVisibleBias": "[-1.0, -1.0]",
+      "energyHiddenBias": "[-2.0, 2.0]",
+      "energyData": "[[0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1], [0, 0], [1, 1]]"
+    },
+    "history": []
+  }
+}

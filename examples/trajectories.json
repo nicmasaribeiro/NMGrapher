@@ -1,0 +1,79 @@
+{
+  "version": 5,
+  "worksheet_name": "GBM and sequential trajectories",
+  "rows": [
+    {
+      "id": "trajectory_note",
+      "type": "note",
+      "text": "Use Animate trajectory below G, C, or A. G is a GBM ensemble, C a helix, and A gradient descent. Open Trajectories for editable examples and CSV/HTML exports."
+    },
+    {
+      "id": "traj_0",
+      "text": "G=gbm(100,0.05,0.2,1,252,8,42)",
+      "visible": true
+    },
+    {
+      "id": "traj_1",
+      "text": "trajectory_times(G)",
+      "visible": true
+    },
+    {
+      "id": "traj_2",
+      "text": "trajectory_path(G,0)",
+      "visible": true
+    },
+    {
+      "id": "traj_3",
+      "text": "r(t)=[cos(t),sin(t),t/4]",
+      "visible": true
+    },
+    {
+      "id": "traj_4",
+      "text": "C=trajectory(r,0,12.566370614359172,400)",
+      "visible": true
+    },
+    {
+      "id": "traj_5",
+      "text": "update(s,k,t,dt)=s-dt*[2*s[0],4*s[1]]",
+      "visible": true
+    },
+    {
+      "id": "traj_6",
+      "text": "A=iterate(update,[3,2],150,0.02)",
+      "visible": true
+    },
+    {
+      "id": "traj_7",
+      "text": "trajectory_path(A,0,0)",
+      "visible": true
+    },
+    {
+      "id": "traj_8",
+      "text": "trajectory_path(A,0,1)",
+      "visible": true
+    }
+  ],
+  "datasets": [],
+  "graphs": [],
+  "view": "graph",
+  "bounds": [
+    0,
+    1,
+    0,
+    150
+  ],
+  "curve_range": [
+    0,
+    1
+  ],
+  "trajectory_settings": {
+    "kind": "sequence",
+    "name": "Gradient descent",
+    "state": "[3,2]",
+    "update": "s-dt*[2*s[0],4*s[1]]",
+    "horizon": 3,
+    "steps": 150,
+    "display": "2d",
+    "coordinates": "0,1"
+  }
+}
