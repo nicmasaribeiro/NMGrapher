@@ -1,0 +1,13 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('static/app.js','utf8');
+const newRow=source.slice(source.indexOf('const newRow='),source.indexOf('function toast('));
+const validate=source.slice(source.indexOf('function validateWorksheet('),source.indexOf('function loadExample('));
+const context={uid:()=>1,rows:[],colors:['blue'],GreekInput:{normalize:s=>s.replaceAll('alpha','α')},validPlotSlice:()=>false};
+vm.createContext(context);vm.runInContext(newRow+validate,context);
+context.data={rows:[{type:'note',text:' alpha = 99\nRemember beta & <text> '},{text:'alpha=2'}]};
+const rows=vm.runInContext('validateWorksheet(JSON.parse(JSON.stringify(data)))',context);
+assert.equal(rows[0].type,'note');assert.equal(rows[0].text,context.data.rows[0].text);
+assert.equal(rows[1].type,'expression');assert.equal(rows[1].text,'α=2');
+context.data={rows:[{type:'unknown',text:'a'}]};assert.throws(()=>vm.runInContext('validateWorksheet(data)',context),/cell type/);
+console.log('Notes: plain text, whitespace, worksheet roundtrip, and legacy expressions verified.');

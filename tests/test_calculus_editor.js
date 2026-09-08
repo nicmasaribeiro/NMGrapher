@@ -15,3 +15,10 @@ assert.throws(()=>draft({...defaults,variables:[]}),/Select/);
 assert.throws(()=>draft({...defaults,args:['x','x']}),/distinct/);
 assert.throws(()=>draft({...defaults,resultMode:'point',point:''}),/coordinates/);
 console.log('Calculus editor: operator drafts, point binding, directional step, integrals, and validation passed.');
+
+const region=draft({...defaults,args:['x','y','t'],variables:['x','y'],operation:'multiple',expression:'x+y',integrationBounds:[{variable:'x',lower:'0',upper:'y'},{variable:'y',lower:'0',upper:'t'}]});
+assert.equal(region.body,'integrate(x+y, [x, y], [0, 0], [y, t], 1e-8, 1e-7)');
+assert.deepEqual(region.remaining,['t']);
+assert.equal(region.text,'g(t) = '+region.body);
+assert.throws(()=>draft({...defaults,operation:'multiple',variables:['x']}),/two or three/);
+assert.throws(()=>draft({...defaults,operation:'multiple',integrationBounds:[{variable:'x',lower:'',upper:'1'}]}),/bounds/);
