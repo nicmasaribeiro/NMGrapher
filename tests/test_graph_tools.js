@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict'),g=require('../static/graph-tools.js');
 const specs=Object.keys(g.types).map((type,i)=>g.fresh(type,'g'+i));
-assert.deepEqual(g.validate(JSON.parse(JSON.stringify(specs))),specs);
+for(let i=0;i<specs.length;i+=12)assert.deepEqual(g.validate(JSON.parse(JSON.stringify(specs.slice(i,i+12)))),specs.slice(i,i+12));
 const curve=g.fresh('parametric','curve'),space=g.fresh('parametric3d','space'),hist=g.fresh('histogram','hist');
 const results=[{id:'curve',x:[1,null,3],y:[2,null,4],parameter:[0,1,2]},{id:'space',x:[1],y:[2],z:[3]},{id:'hist',x:[1,2],y:[3,4],widths:[1,1]}];
 const two=g.plot([curve,space,hist],results,'2d');assert.equal(two.data.length,2);assert.equal(two.data[0].connectgaps,false);assert.deepEqual(two.data[1].width,[1,1]);

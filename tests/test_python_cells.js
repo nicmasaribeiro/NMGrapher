@@ -1,0 +1,15 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('static/app.js','utf8');
+const code=source.slice(source.indexOf('function validateWorksheet('),source.indexOf('function loadExample('));
+const context={newRow:(text,i)=>({id:String(i),type:'expression',text}),validPlotSlice:()=>false};
+vm.createContext(context);vm.runInContext(code,context);
+const text='import numpy as np\n\ndef alpha(t):\n    return np.sin(t) ** 2';
+const rows=context.validateWorksheet({version:5,rows:[{type:'python',text}]});
+assert.equal(rows[0].type,'python');assert.equal(rows[0].text,text);
+const catalog=require('../static/function-catalog.js');
+for(const label of ['Uniform vector','Uniform matrix','Normal matrix','Activate entries','Activate object','Stochastic matrix'])assert(catalog.entries.some(e=>e.label===label));
+const html=fs.readFileSync('templates/index.html','utf8');
+assert(html.indexOf('<dialog id="randomDialog">')>html.indexOf('<body>'));
+assert(html.includes('id="addPythonBtn"'));assert(source.includes('.expression:not(.note-cell):not(.python-cell)'));
+console.log('Python worksheet roundtrip preserves raw code; random catalog and cell controls present.');
