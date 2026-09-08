@@ -1,0 +1,10 @@
+'use strict';
+const assert=require('node:assert/strict'),w=require('../static/wavelet-tools.js');
+const settings=w.settings(null);assert.deepEqual(w.settings(JSON.parse(JSON.stringify(settings))),settings);
+assert.deepEqual(w.parseValues('1, 2; 3\n4 5 6 7 8'),[1,2,3,4,5,6,7,8]);
+assert.throws(()=>w.parseValues('time,value\n1,2'),/real numbers/);assert.throws(()=>w.parseValues('1 2 3'),/8–10,000/);assert.throws(()=>w.settings({dt:0}),/dt/);assert.throws(()=>w.settings({resample:'true'}),/resampling/);
+const demo=w.demo();assert.deepEqual(demo,w.demo());assert.equal(demo.values.length,512);assert.equal(demo.time[1]-demo.time[0],1/128);
+const r={time:[0,1],observed:[3,5],prepared:[1,2],baseline:[2,3],dwt:{denoised:[2,4],reconstruction:[3,5],bands:[{name:'A1',values:[.5,.5]}]},cwt:{frequency:[1,.5],power:[[1,100],[0,.1]],edge_width:[.1,4]}};
+assert.deepEqual(w.power(r,true),[[0,2],[null,-1]]);assert.deepEqual(w.dataset(r,'residual','out','id').columns[1].values,[1,1]);assert.equal(w.dataset(r,'A1','out','id').columns[1].name,'A1');
+const csv=w.csv(r).trim().split('\n');assert.equal(csv.length,3);assert.equal(csv[0],'time,signal,prepared,baseline,reconstruction,denoised,residual,A1');assert.equal(csv[1].split(',').length,8);assert.deepEqual(w.edgeLines(r)[0].x,[.1,null]);
+console.log('Wavelet controls: settings roundtrip, sample parsing, deterministic demo, band export, dataset reuse, log power, and edge boundaries passed.');

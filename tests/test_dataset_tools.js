@@ -1,0 +1,16 @@
+'use strict';
+const assert=require('node:assert/strict');global.GreekInput=require('../static/greek-input.js');
+const tools=require('../static/dataset-tools.js');
+const input={id:'1',name:'data_1',columns:[{name:'time',values:[2,1,0]},{name:'value',values:[0,null,4]}],x:'time',y:['value'],style:'lines',visible:true};
+const d=tools.validate([input]);
+assert.deepEqual(tools.validate(JSON.parse(JSON.stringify(d))),d);
+const plot=tools.traces(d,['#000'])[0];assert.deepEqual(plot.x,[2,null,0]);assert.deepEqual(plot.y,[0,null,4]);assert.equal(plot.connectgaps,false);
+assert.deepEqual(tools.fit(d),[-.5,2.5,-.5,4.5]);
+assert.equal(tools.name('alpha₁'),'α_1');assert.equal(tools.name('Theta_2'),'θ_2');
+assert.equal(tools.traces([{...d[0],visible:false}],['#000']).length,0);
+assert.throws(()=>tools.validate([{...input,y:[]}]),/1–8/);
+assert.throws(()=>tools.validate([{...input,columns:[{name:'bad',values:['1']}]}]),/finite/);
+assert.throws(()=>tools.validate([input,input]),/unique/);
+assert.throws(()=>tools.fit([{...d[0],columns:[{name:'time',values:[0]},{name:'value',values:[1e10]}]}]),/Scale/);
+assert.throws(()=>tools.name('a b'),/letters/);
+console.log('Dataset controls: worksheet roundtrip, missing-value alignment, plot bounds, names, visibility, and validation passed.');

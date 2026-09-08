@@ -1,0 +1,17 @@
+'use strict';
+const assert=require('node:assert/strict'),g=require('../static/graph-tools.js');
+const specs=Object.keys(g.types).map((type,i)=>g.fresh(type,'g'+i));
+assert.deepEqual(g.validate(JSON.parse(JSON.stringify(specs))),specs);
+const curve=g.fresh('parametric','curve'),space=g.fresh('parametric3d','space'),hist=g.fresh('histogram','hist');
+const results=[{id:'curve',x:[1,null,3],y:[2,null,4],parameter:[0,1,2]},{id:'space',x:[1],y:[2],z:[3]},{id:'hist',x:[1,2],y:[3,4],widths:[1,1]}];
+const two=g.plot([curve,space,hist],results,'2d');assert.equal(two.data.length,2);assert.equal(two.data[0].connectgaps,false);assert.deepEqual(two.data[1].width,[1,1]);
+const three=g.plot([curve,space],results,'3d');assert.equal(three.data.length,1);assert.equal(three.data[0].type,'scatter3d');assert.deepEqual(three.data[0].z,[3]);
+assert.equal(g.plot([{...curve,visible:false}],results,'2d').data.length,0);
+assert.equal(g.plot([curve],[{id:'curve',error:'Bad formula'}],'2d').data.length,0);
+assert.equal(g.plot([curve,hist],results,'curve').data.length,1);
+assert.ok(g.plot([{...curve,name:'<b>test</b>'}],results).data[0].name.includes('&lt;'));
+assert.throws(()=>g.validate([curve,curve]),/unique/);assert.throws(()=>g.validate([{...curve,range:[1,1]}]),/ranges/);assert.throws(()=>g.validate([{...curve,samples:10000}]),/samples/);
+const d=g.fresh('probability','dist');let data=[{id:'dist',x:[0,1],y:[.2,.8],discrete:true}];
+assert.equal(g.plot([d],data).data[0].type,'bar');d.probability_mode='cdf';assert.equal(g.plot([d],data).data[0].line.shape,'hv');
+console.log('Graph controls: all type roundtrips, 2D/3D isolation, missing data, visibility, safe names, histogram widths, and discrete probability plots passed.');
+const renamed={...curve,name:'My oscillation α₁'};assert.equal(g.validate(JSON.parse(JSON.stringify([renamed])))[0].name,renamed.name);assert.equal(g.plot([renamed],results,'curve').layout.title.text,'My oscillation α₁');assert.equal(g.label('<b>signal</b>'),'&lt;b&gt;signal&lt;/b&gt;');

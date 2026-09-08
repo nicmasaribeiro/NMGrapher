@@ -1,0 +1,17 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {draft,operations}=require('../static/calculus-editor.js');
+const defaults={args:['x','y','z'],variable:'x',variables:['x','y','z'],expression:'f(x,y,z)',operation:'grad',lower:'0',upper:'1',name:'g',resultMode:'function',point:'1,2,3',direction:'1,0,0',step:'',absTol:'1e-8',relTol:'1e-7'};
+assert.equal(draft(defaults).text,'g(x, y, z) = grad(f(x,y,z), [x, y, z])');
+assert.equal(draft({...defaults,operation:'directional',step:'0.001'}).body,'directional(f(x,y,z), [x, y, z], [1,0,0], [x, y, z], 0.001)');
+assert.equal(draft({...defaults,operation:'mixed_diff',variables:['x','z'],resultMode:'point'}).text,'at(mixed_diff(f(x,y,z), [x, z]), [x, y, z], [1,2,3])');
+assert.equal(draft({...defaults,operation:'second',step:'0.001'}).body,'diff(f(x,y,z), x, x, 2, 0.001)');
+assert.deepEqual(draft({...defaults,operation:'definite'}).remaining,['y','z']);
+assert.equal(draft({...defaults,operation:'accumulated'}).body,'integrate(f(x,y,z), x, 0, x, 1e-8, 1e-7)');
+for(const operation of Object.keys(operations))assert.ok(draft({...defaults,operation,variables:operation==='mixed_diff'?['x','y']:defaults.variables}).text);
+assert.throws(()=>draft({...defaults,operation:'curl',variables:['x','y']}),/three/);
+assert.throws(()=>draft({...defaults,operation:'mixed_diff'}),/two/);
+assert.throws(()=>draft({...defaults,variables:[]}),/Select/);
+assert.throws(()=>draft({...defaults,args:['x','x']}),/distinct/);
+assert.throws(()=>draft({...defaults,resultMode:'point',point:''}),/coordinates/);
+console.log('Calculus editor: operator drafts, point binding, directional step, integrals, and validation passed.');
