@@ -2,6 +2,8 @@
 const $ = id => document.getElementById(id);
 const colors = ['#2864d7','#dd6b35','#8a4dc2','#169582','#cf4166','#a57b17'];
 const examples = {
+ rbm:['M=rbm([[2,-2],[2,-2]],[-1,-1],[-2,2])','M([0,0])','M([1,1])','energy(M,[1,1],[1,0])','free_energy(M,[1,1])','log_partition(M)','hidden_probabilities(M,[1,0])','reconstruct(M,[1,0])','energy_sample(M,8,42)','U(r)=free_energy(M,r)','F(r)=force(U,r)','F([0.2,0.7])'],
+ boltzmann_machine:['B=boltzmann_machine([[0,3],[3,0]],[-1.5,-1.5])','energy(B,[0,0])','energy(B,[0,1])','B([1,1])','B([0,0])','log_partition(B)','energy_sample(B,8,42)','R(t)=boltzmann_machine([[0,3],[3,0]],[-1.5,-1.5],t)','p(t)=energy_probability(R(t),[1,1])'],
  vector_fields:['F(r)=[-r[1],r[0]]','field_divergence(F,[1,2])','field_curl(F,[1,2])','field_jacobian(F,[1,2])','U(r)=(r[0]^2+r[1]^2)/2','G(r)=force(U,r)','r(t)=[cos(t),sin(t)]','work(F,r,0,2*pi)','work(G,r,0,2*pi)'],
  dirac:['|ψ⟩=(|0⟩+i|1⟩)/sqrt(2)','⟨ψ|ψ⟩','⟨ψ|pauliY()|ψ⟩','ρ=|ψ⟩⟨ψ|','|Φ⟩=(|00⟩+|11⟩)/sqrt(2)','probabilities(|Φ⟩)','|u(t)⟩=cos(t/2)|0⟩+sin(t/2)|1⟩','E(t)=⟨u(t)|pauliZ()|u(t)⟩'],
  desmos_demo:["f_0(x)=(1-x^2)*exp(-x^2/2)", "f_1(x)=(1-(x^3-3x^2*(1-x))^2)*exp(-(x^3-3x^2*(1-x))^2/2)", "F(x,y)=f_0(x)*f_1(y)", "g(θ,φ)=∫_{0}^{θ} ∫_{0}^{φ} F(x,y) dydx", "d_x(x,y)=d/dx F(x,y)", "N(x)=normaldist(0,1).pdf(x)", "i_0(t)=∫_{0}^{t} N(x) log10(N(x)/f_0(x)) dx", "i_1(t)=∫_{0}^{t} N(x) log10(N(x)/f_1(x)) dx", "p_t(t,N)=∏_{n=1}^{N} f_0(t)", "d/dx ∑_{n=1}^{3} f_0(x)", "c_0(t)=∫_{0}^{t} ∫_{0}^{t} p_t(x,y) dxdy", "c_0(1)"],
@@ -30,6 +32,12 @@ const examples = {
 };
 let waveletSettings=WaveletTools.settings(null);
 let graphs=[],graphResults=[],graphSelection='2d',graphEdit=null,graphRevision=0;
+let energyState=null;
+let worksheetName='NMGrapher-worksheet';
+let trajectorySettings=TrajectoryTools.settings(null);
+let surfaceSettings=SurfaceTools.settings(null);
+const energyClient=new AsyncCompute.ComputeClient({fetch:(url,options)=>fetch(url==='/api/jobs'?'/api/energy/jobs':url,options)});
+let energyRevision=0,energyBusy=false,energyReport=null;
 let datasets=[],rows=[],results=[],resultIds=[],view='graph',bounds=[-10,10,-7,7],selectedMatrix='',requestId=0,timer,rendering=false,matrixEdit=null,gridRows=2,gridCols=2,component='real',functionEdit=null;
 const computeClient=new AsyncCompute.ComputeClient();
 let computationLoading=false,paintTimer=null,plotTask=null,plotQueued=false;
@@ -43,8 +51,12 @@ const uid=()=>Math.random().toString(36).slice(2,11);
 const newRow=(text='',i=rows.length)=>({id:uid(),type:'expression',text:GreekInput.normalize(text),color:colors[i%colors.length],plotName:'',visible:true,min:-5,max:5,plotComponent:'all',plotSlice:null});
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3500);}
 function fmt(v){return typeof v==='number'?Number(v.toPrecision(7)).toString():String(v);}
-function worksheetData(){return {version:5,rows,datasets,graphs,graphSelection,wavelet_settings:waveletSettings,bounds,view,component,curve_range:[Number($('parameterMin').value),Number($('parameterMax').value)]};}
-function restoreViewOptions(data){
+function worksheetData(){return {version:5,worksheet_name:worksheetName,trajectory_settings:trajectorySettings,surface_settings:surfaceSettings,energy_state:energyState,rows,datasets,graphs,graphSelection,wavelet_settings:waveletSettings,bounds,view,component,curve_range:[Number($('parameterMin').value),Number($('parameterMax').value)]};}
+function restoreViewOptions(data,sourceName=''){
+ surfaceSettings=SurfaceTools.settings(data.surface_settings);
+ trajectorySettings=TrajectoryTools.settings(data.trajectory_settings);window.TrajectoryStudio?.reset();
+ energyRevision++;energyClient.cancel();energySetBusy(false);energyReport=null;if($('energyDialog').open)$('energyDialog').close();
+ energyState=EnergyTools.saved(data.energy_state);
  waveletSettings=WaveletTools.settings(data.wavelet_settings);
  graphs=GraphTools.validate(data.graphs??[]);graphResults=[];graphSelection=['2d','3d',...graphs.map(g=>g.id)].includes(data.graphSelection)?data.graphSelection:'2d';renderGraphs();
  datasets=DatasetTools.validate(data.datasets??[]);renderDatasets();
@@ -53,6 +65,7 @@ function restoreViewOptions(data){
  const range=data.curve_range;
  if(Array.isArray(range)&&range.length===2&&range.every(v=>Number.isFinite(v)&&Math.abs(v)<=1e4)&&range[1]>range[0]){$('parameterMin').value=range[0];$('parameterMax').value=range[1];}
  else{$('parameterMin').value=0;$('parameterMax').value=2*Math.PI;}
+ worksheetName=restoredWorksheetName(data,sourceName);
 }
 function saveLocal(){try{localStorage.setItem('matrix-graph-v1',JSON.stringify(worksheetData()));saveLocal.warned=false;return true;}catch{if(!saveLocal.warned){toast('Browser storage is full. Use Save worksheet to keep your data.');saveLocal.warned=true;}return false;}}
 function reloadSystem(){
@@ -67,7 +80,7 @@ function validateWorksheet(data){
  if(!data || !Array.isArray(data.rows) || data.rows.length>40)throw Error('The file must contain at most 40 expression rows.');
  return data.rows.map((r,i)=>{if(!r || typeof r.text!=='string' || r.text.length>1200)throw Error('Invalid expression in worksheet.');if(r.plotName!==undefined&&(typeof r.plotName!=='string'||r.plotName.length>80))throw Error('Plot names support at most 80 characters.');if(r.type!==undefined&&!['expression','note','python'].includes(r.type))throw Error('Unknown worksheet cell type.');return {...newRow(r.type==='note'?'':r.text,i),...(['note','python'].includes(r.type)?{type:r.type,text:r.text}:{}),plotName:r.plotName?.trim()||'',...(typeof r.color==='string'&&/^#[0-9a-f]{6}$/i.test(r.color)?{color:r.color}:{}),plotSlice:validPlotSlice(r.plotSlice)?r.plotSlice:null,plotComponent:Number.isInteger(r.plotComponent)&&r.plotComponent>=0&&r.plotComponent<1024?r.plotComponent:'all',visible:r.visible!==false,min:Number.isFinite(r.min)?r.min:-5,max:Number.isFinite(r.max)?r.max:5};});
 }
-function loadExample(name){if(!examples[name])return;graphs=[];graphResults=[];renderGraphs();rows=examples[name].map(newRow);if(name==='qubit'){rows[0].min=0;rows[0].max=Math.PI;rows[1].min=0;rows[1].max=2*Math.PI;}if(name==='wavelet'){rows[0].min=0.1;rows[0].max=4;}if(name==='ctmc'){rows[0].min=0;rows[0].max=20;}view=['qubit','bell','dirac'].includes(name)?'quantum':name==='ctmc'||name==='hermitian'?'heatmap':['complex','greek'].includes(name)?'complex':name==='domain'?'domain':['two_vars','partials','n_vars'].includes(name)?'surface':'graph';if(view==='domain')component='phase';if(view==='surface')component='real';selectedMatrix=['ctmc','qubit'].includes(name)?rows[2].id:['bell','dirac'].includes(name)?rows[0].id:'';bounds=['complex','domain','hermitian','greek','two_vars','calculus','partials'].includes(name)?[-4,4,-3,3]:[-10,10,-7,7];if(name==='vector_fields'){const g=GraphTools.fresh('vectorfield',uid());g.name='Rotational force field';g.expression='F([x,y])';graphs=[g];graphSelection=g.id;view='created';renderGraphs();bounds=[-5,5,-5,5];}if(name==='desmos_demo'){bounds=[0,0.75,0,0.75];$('parameterMin').value=0;$('parameterMax').value=0.75;}renderRows();schedule(0);}
+function loadExample(name){if(!examples[name])return;graphs=[];graphResults=[];renderGraphs();rows=examples[name].map(newRow);if(name==='qubit'){rows[0].min=0;rows[0].max=Math.PI;rows[1].min=0;rows[1].max=2*Math.PI;}if(name==='wavelet'){rows[0].min=0.1;rows[0].max=4;}if(name==='ctmc'){rows[0].min=0;rows[0].max=20;}view=['qubit','bell','dirac'].includes(name)?'quantum':name==='ctmc'||name==='hermitian'?'heatmap':['complex','greek'].includes(name)?'complex':name==='domain'?'domain':['two_vars','partials','n_vars'].includes(name)?'surface':'graph';if(view==='domain')component='phase';if(view==='surface')component='real';selectedMatrix=['ctmc','qubit'].includes(name)?rows[2].id:['bell','dirac'].includes(name)?rows[0].id:'';bounds=['complex','domain','hermitian','greek','two_vars','calculus','partials'].includes(name)?[-4,4,-3,3]:[-10,10,-7,7];if(name==='vector_fields'){const g=GraphTools.fresh('vectorfield',uid());g.name='Rotational force field';g.expression='F([x,y])';graphs=[g];graphSelection=g.id;view='created';renderGraphs();bounds=[-5,5,-5,5];}if(name==='rbm'){const g=GraphTools.fresh('contour',uid());g.name='RBM visible free energy · continuous relaxation';g.z='free_energy(M,[x,y])';g.range=[0,1];g.yrange=[0,1];graphs=[g];graphSelection=g.id;view='created';renderGraphs();bounds=[0,1,0,1];}if(name==='boltzmann_machine'){bounds=[0.05,5,0,1];$('parameterMin').value=0.05;$('parameterMax').value=5;}if(name==='desmos_demo'){bounds=[0,0.75,0,0.75];$('parameterMin').value=0;$('parameterMax').value=0.75;}renderRows();schedule(0);}
 function addExpression(text=''){if(rows.length>=40){toast('Maximum 40 expressions per worksheet.');return;}rows.push(newRow(text));renderRows();schedule(0);$('expressions').lastElementChild.querySelector('textarea').focus();}
 function addNote(){if(rows.length>=40){toast('Maximum 40 cells per worksheet.');return;}rows.push({...newRow(),type:'note'});renderRows();schedule(0);$('expressions').lastElementChild.querySelector('textarea').focus();}
 $('addNoteBtn').onclick=addNote;
@@ -149,12 +162,21 @@ function renderResults(indices=null){
   if(row.type==='note')return;
   const el=document.querySelector(`.expression[data-id="${row.id}"]`);if(!el)return;const box=el.querySelector('.result');if(box.contains(document.activeElement)){deferredResults.add(row.id);return;}deferredResults.delete(row.id);box.replaceChildren();const r=results[i];if(!r)return;
   box.className='result'+(r.error?' error':'');if(r.function){const b=document.createElement('button');b.textContent='Edit function';b.className='edit-function';b.onclick=()=>openFunction(i);box.append(b);const calculus=document.createElement('button');calculus.textContent='Calculus';calculus.className='edit-function';calculus.onclick=()=>r.kind==='field_function'?openFieldSuite(i):openCalculus(i);box.append(calculus);if(r.kind==='surface'&&!r.error){const surface=document.createElement('button');surface.className='edit-function';surface.textContent='Surface';surface.onclick=()=>selectView('surface',row.id);box.append(surface);}}if(r.function&&r.function.parameters.length>1)renderSliceControls(box,row,r);if(r.error){const error=document.createElement('div');error.textContent=r.error;box.append(error);return;}
-  if(r.kind==='field_function'){
+  if(r.kind==='trajectory'){
+   const tag=document.createElement('div');tag.className='result-tag';tag.textContent=`${r.trajectory.kind.toUpperCase()} · ${r.trajectory.paths} path(s) · ${r.trajectory.frames} frames · ${r.trajectory.dimensions} component(s)`;box.append(tag);
+   const button=document.createElement('button');button.textContent='Animate trajectory';button.className='edit-function';button.onclick=()=>window.TrajectoryStudio.open(r.trajectory,r.name);box.append(button);
+  }else if(r.kind==='update_function'||r.kind==='trajectory_function'){
+   const tag=document.createElement('div');tag.className='result-tag';tag.textContent=r.kind==='update_function'?'Sequential update · use iterate(G,initial,steps,dt) or the Trajectories studio.':'Trajectory-valued function · call with parameter values, then animate or extract paths.';box.append(tag);
+  }else if(r.kind==='energy_model'){
+   const tag=document.createElement('div');tag.className='result-tag';tag.textContent=`${r.energy_model.kind.toUpperCase()} · ${r.energy_model.visible} visible / ${r.energy_model.hidden} hidden units · T=${r.energy_model.temperature}`;box.append(tag);
+   const b=document.createElement('button');b.className='edit-function';b.textContent='Energy model studio';b.onclick=()=>openEnergyModel(r.model,r.name);box.append(b);
+  }else if(r.kind==='field_function'){
    const tag=document.createElement('div');tag.className='result-tag';tag.textContent=`Spatial function · position-vector argument (at least ${r.input_dimensions} coordinates)`;box.append(tag);
    const b=document.createElement('button');b.className='edit-function';b.textContent='Vector field tools';b.onclick=()=>openFieldSuite(i);box.append(b);
   }else if(r.kind==='python'){
    const help=document.createElement('div');help.textContent='Use exported names in expressions below. Ctrl/⌘ + Enter recalculates.';box.append(help);
    for(const item of r.exports||[]){const b=document.createElement('button');b.className='edit-function';b.textContent=item.name+(item.parameters?'('+item.parameters.join(', ')+')':'');b.onclick=()=>addExpression(item.parameters?`${item.name}(${item.parameters.length===1?'x':item.parameters.map((_,k)=>k<2?['x','y'][k]:'0').join(', ')})`:item.name);box.append(b);}
+  }else if(r.kind==='energy_model_function'){const tag=document.createElement('div');tag.className='result-tag';tag.textContent='Energy-model function · call with parameter values, then use energy, free_energy, or energy_probability.';box.append(tag);
   }else if(r.kind==='distribution_function'){const tag=document.createElement('div');tag.className='result-tag';tag.textContent='Distribution-valued function · call with parameter values, then use .pdf(x) or .cdf(x).';box.append(tag);
   }else if(r.kind==='wavelet_transform'){
    const t=r.transform,tag=document.createElement('div');tag.className='result-tag';tag.textContent=`${t.type.toUpperCase()} · ${t.wavelet} · ${t.length} samples · ${t.labels.length} bands/scales`;box.append(tag);
@@ -284,10 +306,13 @@ async function drawPlotNow(){
   for(const trace of data)if(trace.hovertemplate)trace.hovertemplate=trace.hovertemplate.replace('<extra></extra>','<extra>%{fullData.name}</extra>');
  }
  if(['surface','domain'].includes(view)){const selected=rows.find(r=>r.id===selectedMatrix);if(selected?.plotName){layout.title={text:GraphTools.label(selected.plotName)};layout.margin.t=50;}}
+ const hasSurface=view!=='quantum'&&data.some(t=>t.type==='surface');
+ $('surfaceControlsBtn').hidden=!(hasSurface||view==='surface');
+ if(hasSurface){try{({data,layout}=SurfaceTools.apply(data,layout,surfaceSettings));}catch(error){$('plotEmpty').hidden=false;$('plotEmpty').textContent=error.message;data=[];}}
  applyPlotTheme(layout);
  rendering=true;
- try{await Plotly.react('plot',data,layout,{responsive:true,scrollZoom:true,displayModeBar:false,displaylogo:false});}finally{rendering=false;}
- if(!$('plot')._boundEvents){$('plot').on('plotly_relayout',e=>{if(rendering||view==='created'||view==='heatmap'||view==='surface'||view==='quantum')return;if(e['xaxis.autorange']||e['yaxis.autorange']){bounds=[-10,10,-7,7];schedule(0);return;}const b=[e['xaxis.range[0]']??bounds[0],e['xaxis.range[1]']??bounds[1],e['yaxis.range[0]']??bounds[2],e['yaxis.range[1]']??bounds[3]];if(b.some((v,i)=>Math.abs(v-bounds[i])>1e-9)){bounds=b;schedule(140);}});$('plot')._boundEvents=true;}
+ try{await Plotly.react('plot',data,layout,{responsive:true,scrollZoom:true,displayModeBar:hasSurface,displaylogo:false});}finally{rendering=false;}
+ if(!$('plot')._boundEvents){$('plot').on('plotly_relayout',e=>{if(!rendering)window.SurfaceControls?.capture(e);if(rendering||view==='created'||view==='heatmap'||view==='surface'||view==='quantum')return;if(e['xaxis.autorange']||e['yaxis.autorange']){bounds=[-10,10,-7,7];schedule(0);return;}const b=[e['xaxis.range[0]']??bounds[0],e['xaxis.range[1]']??bounds[1],e['yaxis.range[0]']??bounds[2],e['yaxis.range[1]']??bounds[3]];if(b.some((v,i)=>Math.abs(v-bounds[i])>1e-9)){bounds=b;schedule(140);}});$('plot')._boundEvents=true;}
 }
 // Parse only bracket structure here; cell expressions are evaluated by the Python interpreter.
 function matrixCells(text){const rhs=text.slice(text.indexOf('=')+1).trim();if(!rhs.startsWith('[[')||!rhs.endsWith(']]'))return null;let depth=0,start=0,parts=[];for(let i=1;i<rhs.length-1;i++){if(rhs[i]==='['){if(depth===0)start=i+1;depth++;}else if(rhs[i]===']'){depth--;if(depth===0)parts.push(rhs.slice(start,i));}}if(!parts.length)return null;return parts.map(p=>{let cells=[],s=0,d=0;for(let i=0;i<p.length;i++){if('(['.includes(p[i]))d++;if(')]'.includes(p[i]))d--;if(p[i]===','&&d===0){cells.push(p.slice(s,i).trim());s=i+1;}}cells.push(p.slice(s).trim());return cells;});}
@@ -305,12 +330,37 @@ $('addBtn').onclick=()=>addExpression();$('matrixBtn').onclick=()=>openMatrix();
 $('examples').onchange=e=>{loadExample(e.target.value);e.target.value='';};document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>selectView(b.dataset.view));$('matrixSelect').onchange=e=>{selectedMatrix=e.target.value;drawPlot();};
 $('componentSelect').onchange=e=>{component=e.target.value;saveLocal();drawPlot();};
 for(const id of ['parameterMin','parameterMax'])$(id).onchange=()=>schedule(0);
-$('resetBtn').onclick=()=>{if(view==='created'){const change=$('plot').layout?.scene?{'scene.camera':{eye:{x:1.25,y:1.25,z:1.25}}}:{'xaxis.autorange':true,'yaxis.autorange':true};Plotly.relayout('plot',change);return;}if(['surface','quantum'].includes(view)&&$('plot').layout?.scene)Plotly.relayout('plot',{'scene.camera':{eye:{x:1.25,y:1.25,z:1.25}}});bounds=[-10,10,-7,7];schedule(0);};$('exportBtn').onclick=()=>Plotly.downloadImage('plot',{format:'png',filename:'NMGrapher',scale:2});
-$('saveBtn').onclick=()=>{const blob=new Blob([JSON.stringify(worksheetData(),null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='NMGrapher-worksheet.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast('Worksheet downloaded.');};
-$('importBtn').onclick=()=>$('fileInput').click();$('fileInput').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>2*1024*1024)throw Error('Choose a worksheet smaller than 2 MB.');const data=JSON.parse(await file.text());const importedRows=validateWorksheet(data);DatasetTools.validate(data.datasets??[]);GraphTools.validate(data.graphs??[]);WaveletTools.settings(data.wavelet_settings);rows=importedRows;bounds=validBounds(data.bounds)?data.bounds:[-10,10,-7,7];view=['graph','heatmap','transform','complex','domain','surface','quantum','created'].includes(data.view)?data.view:'graph';restoreViewOptions(data);renderRows();schedule(0);toast('Worksheet opened.');}catch(err){toast(err.message);}e.target.value='';};
+$('resetBtn').onclick=()=>{if(view==='surface'||(view!=='quantum'&&$('plot').data?.some(t=>t.type==='surface'))){window.SurfaceControls?.reset();return;}if(view==='created'){const change=$('plot').layout?.scene?{'scene.camera':{eye:{x:1.25,y:1.25,z:1.25}}}:{'xaxis.autorange':true,'yaxis.autorange':true};Plotly.relayout('plot',change);return;}if(['surface','quantum'].includes(view)&&$('plot').layout?.scene)Plotly.relayout('plot',{'scene.camera':{eye:{x:1.25,y:1.25,z:1.25}}});bounds=[-10,10,-7,7];schedule(0);};$('exportBtn').onclick=()=>Plotly.downloadImage('plot',{format:'png',filename:'NMGrapher',scale:2});
+function worksheetFilename(value){
+ const name=typeof value==='string'?value.trim().replace(/(?:\.json)+$/i,'').trim():'';
+ if(!name||name.length>120)throw Error('Enter a filename of 1–120 characters.');
+ if(/[\\/:*?"<>|\u0000-\u001f\u007f]/.test(name)||name.endsWith('.'))throw Error('Use a filename without / \\ : * ? " < > |, control characters, or a final period.');
+ if(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name))throw Error('That filename is reserved. Choose another name.');
+ return name+'.json';
+}
+function restoredWorksheetName(data,sourceName=''){
+ for(const name of [data.worksheet_name,sourceName,'NMGrapher-worksheet']){try{return worksheetFilename(name).slice(0,-5);}catch{}}
+}
+function previewWorksheetFilename(){
+ try{$('saveWorksheetHint').textContent='Download: '+worksheetFilename($('saveWorksheetName').value);$('saveWorksheetError').textContent='';}
+ catch(error){$('saveWorksheetHint').textContent='The .json extension is added automatically.';$('saveWorksheetError').textContent=error.message;}
+}
+$('saveBtn').onclick=()=>{document.activeElement?.blur();$('saveWorksheetName').value=worksheetName;previewWorksheetFilename();$('saveWorksheetDialog').showModal();$('saveWorksheetName').focus();$('saveWorksheetName').select();};
+$('saveWorksheetName').oninput=previewWorksheetFilename;
+$('saveWorksheetForm').onsubmit=e=>{
+ e.preventDefault();
+ try{
+  const filename=worksheetFilename($('saveWorksheetName').value),name=filename.slice(0,-5);
+  const blob=new Blob([JSON.stringify({...worksheetData(),worksheet_name:name},null,2)],{type:'application/json'});
+  const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;
+  try{document.body.append(a);a.click();}finally{a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  worksheetName=name;$('saveWorksheetDialog').close();if(saveLocal())toast('Download started: '+filename);
+ }catch(error){$('saveWorksheetError').textContent=error.message;}
+};
+$('importBtn').onclick=()=>$('fileInput').click();$('fileInput').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>2*1024*1024)throw Error('Choose a worksheet smaller than 2 MB.');const data=JSON.parse(await file.text());const importedRows=validateWorksheet(data);DatasetTools.validate(data.datasets??[]);GraphTools.validate(data.graphs??[]);WaveletTools.settings(data.wavelet_settings);SurfaceTools.settings(data.surface_settings);rows=importedRows;bounds=validBounds(data.bounds)?data.bounds:[-10,10,-7,7];view=['graph','heatmap','transform','complex','domain','surface','quantum','created'].includes(data.view)?data.view:'graph';restoreViewOptions(data,file.name);renderRows();schedule(0);toast('Worksheet opened.');}catch(err){toast(err.message);}e.target.value='';};
 function validBounds(b){return Array.isArray(b)&&b.length===4&&b.every(v=>Number.isFinite(v)&&Math.abs(v)<=1e6)&&b[1]>b[0]&&b[3]>b[2];}
 let restoredWorksheet=false;
-try{const data=JSON.parse(localStorage.getItem('matrix-graph-v1'));if(data){const importedRows=validateWorksheet(data);DatasetTools.validate(data.datasets??[]);GraphTools.validate(data.graphs??[]);WaveletTools.settings(data.wavelet_settings);rows=importedRows;bounds=validBounds(data.bounds)?data.bounds:bounds;view=['graph','heatmap','transform','complex','domain','surface','quantum','created'].includes(data.view)?data.view:'graph';restoreViewOptions(data);restoredWorksheet=true;}}catch{}
+try{const data=JSON.parse(localStorage.getItem('matrix-graph-v1'));if(data){const importedRows=validateWorksheet(data);DatasetTools.validate(data.datasets??[]);GraphTools.validate(data.graphs??[]);WaveletTools.settings(data.wavelet_settings);SurfaceTools.settings(data.surface_settings);rows=importedRows;bounds=validBounds(data.bounds)?data.bounds:bounds;view=['graph','heatmap','transform','complex','domain','surface','quantum','created'].includes(data.view)?data.view:'graph';restoreViewOptions(data);restoredWorksheet=true;}}catch{}
 if(!restoredWorksheet)rows=examples.basics.map(newRow);renderRows();schedule(0);
 new ResizeObserver(()=>{if($('plot').data)Plotly.Plots.resize('plot');}).observe($('plot'));
 
@@ -427,7 +477,7 @@ function plotTheme(){const css=getComputedStyle(document.documentElement);return
 function applyPlotTheme(layout){
  const t=plotTheme();layout.paper_bgcolor=t.paper;layout.plot_bgcolor=t.paper;layout.font={...layout.font,color:t.text};layout.hoverlabel={bgcolor:t.paper,bordercolor:t.axis,font:{color:t.ink}};
  for(const name of ['xaxis','yaxis'])if(layout[name])Object.assign(layout[name],{gridcolor:t.grid,zerolinecolor:t.axis,tickcolor:t.axis,linecolor:t.axis});
- if(layout.scene)for(const name of ['xaxis','yaxis','zaxis'])Object.assign(layout.scene[name],{backgroundcolor:t.paper,gridcolor:t.grid,zerolinecolor:t.axis,color:t.text,showbackground:true});
+ if(layout.scene)for(const name of ['xaxis','yaxis','zaxis'])Object.assign(layout.scene[name],{backgroundcolor:t.paper,gridcolor:t.grid,zerolinecolor:t.axis,color:t.text,showbackground:layout.scene[name].showbackground??true});
 }
 $('themeSelect').value=document.documentElement.dataset.theme||'light';
 $('themeSelect').onchange=e=>{document.documentElement.dataset.theme=e.target.value;try{localStorage.setItem('matrix-graph-theme',e.target.value);}catch{}if($('plot').data)drawPlot();};
@@ -964,3 +1014,96 @@ $('fieldEvaluate').onclick=async()=>{
  catch(e){if(revision===fieldRevision){$('fieldError').textContent=e.message;$('fieldComputed').textContent='';}}finally{button.disabled=false;}
 };
 $('fieldAddOperation').onclick=()=>{try{addExpression(fieldFormula());$('fieldDialog').close();}catch(e){$('fieldError').textContent=e.message;}};
+
+const energyIds=Object.keys(EnergyTools.defaults);
+function energyForm(){return Object.fromEntries(energyIds.map(id=>[id,id==='energyBinarize'?$(id).checked:$(id).value]));}
+function captureEnergy(){energyState={model:energyState?.model||null,form:energyForm(),history:energyState?.history||[]};saveLocal();}
+function energyControls(){
+ const rbm=$('energyKind').value==='rbm';$('energyVisible').max=rbm?16:12;
+ for(const id of ['energyHiddenLabel','energyHiddenBiasLabel','energyCDLabel','energyBatchLabel'])$(id).hidden=!rbm;
+ $('energyEquation').textContent=rbm?'E(v,h) = −aᵀv − bᵀh − vᵀWh; p(v,h) ∝ exp(−E/T). W connects visible rows to hidden columns.':'E(s) = −½sᵀWs − aᵀs; p(s) ∝ exp(−E/T). All units are visible.';
+ const json=$('energyDataMode').value==='json';$('energyDataLabel').hidden=!json;$('energyDataSourceLabel').hidden=json;
+ $('energyDataSource').placeholder=$('energyDataMode').value==='columns'?'data_1_feature1, data_1_feature2':'training_matrix';
+}
+function energySetBusy(busy,message){energyBusy=busy;for(const id of ['energyInitialize','energyAnalyze','energyLoad','energyTrain','energyExport','energyExportSamples'])$(id).disabled=busy;$('energyStop').hidden=!busy;if(message)$('energyStatus').textContent=message;}
+function energyContext(){return {expressions:rows.map(r=>({text:r.text,type:r.type??'expression'})),datasets};}
+function readEnergyModel(){return EnergyTools.model({kind:$('energyKind').value,weights:JSON.parse($('energyWeights').value),visible_bias:JSON.parse($('energyVisibleBias').value),hidden_bias:$('energyKind').value==='rbm'?JSON.parse($('energyHiddenBias').value):[],temperature:Number($('energyTemperature').value)});}
+function setEnergyModel(model){
+ const m=EnergyTools.model(model);$('energyKind').value=m.kind;$('energyVisible').value=m.visible_bias.length;$('energyHidden').value=m.hidden_bias.length||2;$('energyTemperature').value=m.temperature;
+ $('energyWeights').value=JSON.stringify(m.weights);$('energyVisibleBias').value=JSON.stringify(m.visible_bias);$('energyHiddenBias').value=JSON.stringify(m.hidden_bias);energyControls();
+}
+function renderEnergy(report){
+ energyReport=report;const m=report.model;const summary=$('energySummary');summary.replaceChildren();
+ const line=document.createElement('p');line.textContent=`${report.kind.toUpperCase()} · ${report.visible} visible / ${report.hidden} hidden · temperature ${report.temperature}`;summary.append(line);
+ const stats=document.createElement('p');stats.textContent=report.exact_available?`Exact log Z: ${fmt(report.log_partition)} · visible entropy: ${fmt(report.visible_entropy_bits)} bits · expected joint energy: ${fmt(report.expected_energy)}`:'Exact normalization is limited to 12 visible units. Training and Gibbs sampling remain available.';summary.append(stats);
+ if(report.training){const p=document.createElement('p');p.textContent=`${report.training.algorithm} · ${report.training.train_rows} training / ${report.training.validation_rows} validation rows${report.training.clipped_parameters?' · '+report.training.clipped_parameters+' parameter values clipped to ±100; reduce learning rate':''}`;summary.append(p);}
+ const theme=plotTheme();const layout={paper_bgcolor:theme.paper,plot_bgcolor:theme.paper,font:{color:theme.text},margin:{l:50,r:50,t:45,b:65},height:300};
+ Plotly.react('energyWeightsPlot',[{type:'heatmap',z:m.weights,colorscale:'RdBu',zmid:0}],{...layout,title:{text:'Weight matrix W'},xaxis:{title:{text:m.kind==='rbm'?'Hidden unit':'Unit'}},yaxis:{title:{text:'Visible unit'}}},{responsive:true,displaylogo:false});
+ if(report.top_states){
+  Plotly.react('energyStatesPlot',[{type:'bar',name:'Exact probability',x:report.top_states.map(s=>s.label),y:report.top_states.map(s=>s.probability)},{type:'scatter',mode:'lines+markers',name:report.kind==='rbm'?'Visible free energy':'Energy',x:report.top_states.map(s=>s.label),y:report.top_states.map(s=>s.energy),yaxis:'y2'}],{...layout,title:{text:`Most likely states · ${(100*report.shown_probability_mass).toFixed(1)}% of probability mass`},xaxis:{type:'category',title:{text:'Visible bits (left to right)'}},yaxis:{title:{text:'Probability'}},yaxis2:{overlaying:'y',side:'right',title:{text:'Energy'}},legend:{orientation:'h',y:-.4}},{responsive:true,displaylogo:false});
+ }else{Plotly.purge('energyStatesPlot');$('energyStatesPlot').textContent='Exact state probabilities are unavailable above 12 visible units.';}
+ const history=report.history||[];
+ if(history.length){
+  const metrics=[['train_nll','Training NLL','y'],['validation_nll','Validation NLL','y'],['train_reconstruction_mse','Training reconstruction MSE','y2'],['validation_reconstruction_mse','Validation reconstruction MSE','y2']];
+  const data=metrics.filter(([key])=>history.some(p=>p[key]!==undefined)).map(([key,name,yaxis])=>({type:'scatter',mode:'lines',name,x:history.map(p=>p.epoch),y:history.map(p=>p[key]??null),yaxis,line:{dash:key.startsWith('validation')?'dash':'solid'}}));
+  Plotly.react('energyLossPlot',data,{...layout,title:{text:'Training history · lower is better'},xaxis:{title:{text:'Epoch'}},yaxis:{title:{text:'Exact NLL (nats / observation)'}},yaxis2:{overlaying:'y',side:'right',title:{text:'Reconstruction MSE'}},legend:{orientation:'h',y:-.3}},{responsive:true,displaylogo:false});
+ }else{Plotly.purge('energyLossPlot');$('energyLossPlot').textContent='Train the model to inspect learning history. Reconstruction error is a diagnostic, not a likelihood estimate.';}
+ $('energySamples').textContent=report.samples.slice(0,32).map(row=>row.join(' ')).join('\n')+`\nShowing ${Math.min(32,report.samples.length)} of ${report.samples.length} generated patterns.`;
+}
+async function energyAnalyze(action='analyze'){
+ const revision=++energyRevision;$('energyError').textContent='';energySetBusy(true,'Analyzing…');
+ try{
+  const payload=action==='initialize'?{action,kind:$('energyKind').value,visible:Number($('energyVisible').value),hidden:Number($('energyHidden').value),temperature:Number($('energyTemperature').value),seed:Number($('energySeed').value)}:{...energyContext(),...(action==='load'?{source:$('energySource').value}:{model:readEnergyModel()}),seed:Number($('energySeed').value)};
+  const response=await fetch('/api/energy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(revision!==energyRevision)return;if(!response.ok)throw Error(data.error||'Could not analyze model.');
+  const history=action==='analyze'?energyState?.history||[]:[];setEnergyModel(data.analysis.model);energyState={model:data.analysis.model,form:energyForm(),history};captureEnergy();renderEnergy({...data.analysis,history});energySetBusy(false,'Model ready');
+ }catch(e){if(revision===energyRevision){$('energyError').textContent=e.message;energySetBusy(false,'Check model settings');}}
+}
+function openEnergyModel(model=null,name=null){
+ if(energyBusy){if(!model){$('energyDialog').showModal();return;}energyRevision++;energyClient.cancel();energySetBusy(false);}
+ const state=energyState||{form:EnergyTools.defaults};for(const id of energyIds){const value=state.form?.[id]??EnergyTools.defaults[id];if(id==='energyBinarize')$(id).checked=value;else $(id).value=value;}
+ if(model){setEnergyModel(model);energyState={model,form:energyForm(),history:[]};if(name)$('energyName').value=name;}
+ energyControls();$('energyDialog').showModal();if(energyBusy)return;
+ energyAnalyze(model||energyState?.model?'analyze':'initialize');
+}
+$('energyBtn').onclick=()=>openEnergyModel();$('energyInitialize').onclick=()=>energyAnalyze('initialize');$('energyAnalyze').onclick=()=>energyAnalyze();$('energyLoad').onclick=()=>energyAnalyze('load');
+for(const id of energyIds)$(id).addEventListener('input',()=>{
+ energyRevision++;if(energyBusy){energyClient.cancel();energySetBusy(false,'Settings changed; previous computation discarded.');}
+ if(id!=='energyName'){if(energyState)energyState.history=[];energyReport=null;$('energyStatus').textContent='Settings changed. Analyze or train to update the results below.';}
+ energyControls();captureEnergy();
+});
+$('energySource').addEventListener('input',()=>{energyRevision++;if(energyBusy){energyClient.cancel();energySetBusy(false,'Model source changed; previous computation discarded.');}});
+$('energyTrain').onclick=async()=>{
+ const revision=++energyRevision;$('energyError').textContent='';let failed=false;
+ try{
+  const m=readEnergyModel(),mode=$('energyDataMode').value;
+  const payload={...energyContext(),model:m,binarize:$('energyBinarize').checked,threshold:Number($('energyThreshold').value),options:{epochs:Number($('energyEpochs').value),rate:Number($('energyRate').value),batch:Number($('energyBatch').value),k:Number($('energyCD').value),decay:Number($('energyDecay').value),seed:Number($('energySeed').value),validation:Number($('energyValidation').value)}};
+  if(mode==='json')payload.data=JSON.parse($('energyData').value);else if(mode==='expression')payload.data_expression=$('energyDataSource').value;else payload.data_columns=$('energyDataSource').value.split(',').map(s=>s.trim()).filter(Boolean);
+  captureEnergy();energySetBusy(true,'Training in background…');
+  await energyClient.run(payload,{
+   onResult:record=>{if(revision!==energyRevision||record.kind!=='energy')return;const report=record.result;if(report.error){failed=true;$('energyError').textContent=report.error;return;}setEnergyModel(report.model);energyState={model:report.model,form:energyForm(),history:report.history};captureEnergy();renderEnergy(report);},
+   onDone:()=>{if(revision===energyRevision)energySetBusy(false,failed?'Training failed':'Training complete');},
+   onCancelled:()=>{if(revision===energyRevision)energySetBusy(false,'Training stopped');},
+   onError:e=>{if(revision===energyRevision){$('energyError').textContent=e.message;energySetBusy(false,'Could not train model');}}
+  });
+ }catch(e){if(revision===energyRevision){$('energyError').textContent=e.message;energySetBusy(false,'Check training inputs');}}
+};
+$('energyStop').onclick=()=>{energyRevision++;energyClient.cancel();energySetBusy(false,'Training stopped. Last completed model retained.');};
+window.addEventListener('pagehide',()=>energyClient.cancel());
+$('energyExport').onclick=async()=>{
+ const revision=energyRevision,context=requestId;$('energyError').textContent='';
+ try{
+  const texts=EnergyTools.definitions(readEnergyModel(),$('energyName').value.trim());if(rows.length+texts.length>40)throw Error(`This model needs ${texts.length} cells; free enough worksheet cells before adding it.`);
+  const response=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...energyContext(),expressions:[...rows.map(r=>({text:r.text,type:r.type??'expression'})),...texts.map(text=>({text}))],indices:texts.map((_,i)=>rows.length+i),validate_only:true})});const data=await response.json();if(revision!==energyRevision||context!==requestId)return;if(!response.ok)throw Error(data.error||'Could not add model.');const error=data.results.find(r=>r.error);if(error)throw Error(error.error);
+  texts.forEach(text=>rows.push(newRow(text)));renderRows();schedule(0);$('energyDialog').close();toast('Energy model added. Use energy, free_energy, or energy_probability with its name.');
+ }catch(e){$('energyError').textContent=e.message;}
+};
+$('energyExportSamples').onclick=async()=>{
+ const revision=energyRevision,context=requestId;$('energyError').textContent='';
+ try{
+  if(!energyReport?.samples?.length)throw Error('Analyze or train the current model first.');
+  const name=$('energyName').value.trim()+'_samples';const sample=energyReport.samples;
+  const item={id:uid(),name,columns:[{name:'index',values:sample.map((_,i)=>i)},...sample[0].map((_,j)=>({name:'bit_'+(j+1),values:sample.map(row=>row[j])}))],x:'index',y:['bit_1'],style:'markers',visible:true};
+  const proposed=DatasetTools.validate([...datasets,item]);const response=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...energyContext(),datasets:proposed,validate_only:true})});const data=await response.json();if(revision!==energyRevision||context!==requestId)return;if(!response.ok)throw Error(data.error||'Could not add samples.');if(data.results.some(r=>r.error?.includes('reserved or already defined')))throw Error('Dataset names conflict with a worksheet definition. Rename the model/sample prefix.');
+  datasets=proposed;renderDatasets();schedule(0);$('energyDialog').close();toast('Generated patterns added as a dataset.');
+ }catch(e){$('energyError').textContent=e.message;}
+};

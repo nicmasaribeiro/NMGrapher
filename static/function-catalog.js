@@ -23,6 +23,29 @@
  ['Activate object','random_gate({{[1,2,3]}},0.5,42)','One Bernoulli gate for the entire vector or matrix.'],
  ['Stochastic matrix','stochastic_matrix({{3}},42)','Nonnegative matrix with each row summing to one.']
  ],
+ 'Trajectories & algorithms':[
+ ['GBM paths','gbm({{100}},0.05,0.2,1,252,8,42)','Trajectory object: initial value, drift, volatility, horizon, steps, path count, seed.'],
+ ['Parametric trajectory','trajectory({{r}},0,6.283185307179586,400)','Sample a defined scalar/vector function r(t); animate or export its path.'],
+ ['Sequential algorithm','iterate({{G}},[1,0],400,0.01)','Iterate a defined update G(s,k,t,dt): initial state, steps, positive step size.'],
+ ['Trajectory times','trajectory_times({{G}})','Full time column of a generated trajectory.'],
+ ['Trajectory path','trajectory_path({{G}},0,0)','Full coordinate column: trajectory, zero-based path index, zero-based state component.'],
+ ['GBM mean','gbm_mean({{100}},0.05,t)','Theoretical E[S(t)] for a GBM: initial value, drift per time unit, nonnegative time.']
+ ],
+ 'Energy models':[
+ ['RBM','rbm({{[[2,-2],[2,-2]]}},[-1,-1],[-2,2])','Binary restricted Boltzmann model: visible × hidden weights, visible biases, hidden biases, optional temperature.'],
+ ['Boltzmann machine','boltzmann_machine({{[[0,3],[3,0]]}},[-1.5,-1.5])','Fully visible binary BM: symmetric weights with zero diagonal, biases, optional temperature.'],
+ ['Joint energy','energy({{M}},[1,0],[0,1])','RBM joint energy. For a fully visible BM omit the hidden-state argument.'],
+ ['Free energy','free_energy({{M}},[1,0])','RBM visible free energy after summing hidden states; also accepts continuous coordinates for relaxation plots.'],
+ ['State probability','energy_probability({{M}},[1,0])','Exact probability of a binary visible state; up to 12 visible units. M([1,0]) also works.'],
+ ['Log partition','log_partition({{M}})','Exact log Z, including hidden states for an RBM; up to 12 visible units.'],
+ ['Hidden activations','hidden_probabilities({{M}},[1,0])','RBM hidden probabilities conditioned on visible input.'],
+ ['Reconstruct','reconstruct({{M}},[1,0])','Mean-field RBM visible reconstruction probabilities.'],
+ ['Gibbs samples','energy_sample({{M}},8,42)','Binary sample rows: count up to 32, seed, optional burn-in sweeps and thinning.'],
+ ['Binary state','energy_state({{3}},4)','Binary vector for index 0 to 2^n−1; most significant bit first.'],
+ ['Model weights','energy_weights({{M}})','Return the weight matrix for further linear algebra.'],
+ ['Visible biases','energy_bias({{M}})','Return visible biases.'],
+ ['Hidden biases','hidden_bias({{M}})','Return RBM hidden biases.']
+ ],
  'Quantum / Dirac notation':[
  ['|0⟩','|{{0}}⟩','Computational basis ket; binary labels support 1–5 qubits.'],
  ['|ψ⟩','|{{ψ}}⟩','Named ket, or a state-valued function such as |ψ(t)⟩.'],
