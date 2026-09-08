@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict'),E=require('../static/energy-tools.js');
+const model={kind:'rbm',weights:[[.1,.2],[.3,.4]],visible_bias:[0,0],hidden_bias:[0,0],temperature:.7};
+const state={model,form:{...E.defaults,energyName:'trained',energyData:'[[1,0]]'},history:[{epoch:0,train_nll:1.2},{epoch:1,train_nll:1.1,validation_nll:1.4}]};
+assert.deepEqual(E.saved(JSON.parse(JSON.stringify(state))),state);
+assert.equal(E.saved(null),null);
+const restored=E.saved(state);restored.model.weights[0][0]=50;assert.equal(model.weights[0][0],.1);
+assert.throws(()=>E.model({...model,weights:[[.1]]}));
+assert.throws(()=>E.model({...model,kind:'bm',hidden_bias:[],weights:[[0,1],[0,0]]}));
+assert.throws(()=>E.saved({...state,history:[{epoch:1,train_nll:Infinity}]}));
+assert.throws(()=>E.saved({...state,form:{energyBinarize:'true'}}));
+assert.throws(()=>E.definitions(model,'bad name'));
+assert(E.definitions(model,'M').includes('M=rbm(M_W,M_a,M_b,0.7)'));
+const large={...model,weights:Array.from({length:16},()=>Array.from({length:16},()=>1/3)),visible_bias:Array(16).fill(0),hidden_bias:Array(16).fill(0)};
+const defs=E.definitions(large,'R');assert(defs.length<=40);assert(defs.every(s=>s.length<=1200));
+assert(defs.some(s=>s.startsWith('R_W=[R_W_0,')));
+console.log('Energy studio: model validation, persistence, full-precision worksheet export passed.');

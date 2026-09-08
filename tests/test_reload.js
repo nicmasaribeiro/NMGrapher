@@ -19,7 +19,7 @@ for(const storageFails of [false,true]){
 const startup=source.slice(source.indexOf('let restoredWorksheet=false;'),source.indexOf('new ResizeObserver('));
 for(const data of [null,{rows:[]}]){
  const context={localStorage:{getItem:()=>JSON.stringify(data)},rows:[],bounds:[-1,1,-1,1],view:'graph',
-  validateWorksheet:d=>d.rows,DatasetTools:{validate:()=>{}},GraphTools:{validate:()=>{}},WaveletTools:{settings:()=>{}},
+  validateWorksheet:d=>d.rows,DatasetTools:{validate:()=>{}},GraphTools:{validate:()=>{}},WaveletTools:{settings:()=>{}},SurfaceTools:{settings:()=>{}},
   validBounds:()=>false,restoreViewOptions:()=>{},examples:{basics:['x']},newRow:text=>({text}),renderRows:()=>{},schedule:()=>{}};
  vm.createContext(context);vm.runInContext(startup,context);
  assert.equal(context.rows.length,data?0:1);
