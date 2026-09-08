@@ -26,6 +26,7 @@ def evaluation_payload(payload):
         raise ValueError('Use at most 40 expressions, each up to 1200 characters.')
     if any(r.get('plot_component', 'all') != 'all' and (type(r.get('plot_component')) is not int or not 0 <= r['plot_component'] < 1024) for r in rows):
         raise ValueError('plot_component must be all or an entry index from 0 to 1023.')
+    if any(r.get('type','expression') not in ('expression','note','python') for r in rows):raise ValueError('Unknown worksheet cell type.')
     bounds=payload.get('bounds',[-10,10,-7,7])
     if not isinstance(bounds,list) or len(bounds)!=4 or any(type(v) not in (float,int) or not math.isfinite(v) or abs(v)>1e6 for v in bounds):
         raise ValueError('Graph bounds must be four finite numbers within ±1,000,000.')

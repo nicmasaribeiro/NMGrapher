@@ -57,6 +57,36 @@ def basis(index,qubits=1):
     out=np.zeros(2**int(n),complex);out[int(k)]=1;return out
 
 
+def ket(v):
+    """An unnormalized register column; never silently change its amplitudes."""
+    a=vector(v);register_dimension(len(a));return a.reshape(-1,1)
+
+
+def ketbasis(index,qubits=1):return ket(basis(index,qubits))
+def ketplus():return ket([1/np.sqrt(2),1/np.sqrt(2)])
+def ketminus():return ket([1/np.sqrt(2),-1/np.sqrt(2)])
+def ketplusi():return ket([1/np.sqrt(2),1j/np.sqrt(2)])
+def ketminusi():return ket([1/np.sqrt(2),-1j/np.sqrt(2)])
+
+
+def braket(a,b):
+    a,b=ket(a)[:,0],ket(b)[:,0]
+    if a.shape!=b.shape:raise QuantumError('Bra and ket dimensions must agree.')
+    return np.vdot(a,b)
+
+
+def ketbra(a,b):
+    # Rectangular maps between different registers are valid dyads.
+    return ket(a)@ket(b).conj().T
+
+
+def matrix_element(a,operator,b):
+    a,b=ket(a)[:,0],ket(b)[:,0];operator=np.asarray(operator,dtype=complex)
+    if operator.shape!=(len(a),len(b)) or not np.all(np.isfinite(operator)):
+        raise QuantumError('The operator dimensions must match the bra and ket.')
+    return np.vdot(a,operator@b)
+
+
 def pure_vector(v):
     a=vector(v);register_dimension(len(a))
     if not np.isclose(np.vdot(a,a).real,1,atol=TOL,rtol=0):
@@ -149,6 +179,7 @@ def quantum_info(s):
     except (ValueError,TypeError,np.linalg.LinAlgError):return None
 
 FUNCTIONS={name:globals()[name] for name in (
+    'ket','ketbasis','ketplus','ketminus','ketplusi','ketminusi','braket','ketbra','matrix_element',
     'state','qubit','blochstate','basis','normalize','density','probabilities','pauliX','pauliY','pauliZ',
     'hadamard','Sgate','Tgate','CNOT','Rx','Ry','Rz','expect','bloch','purity','entropy','fidelity','reduced','evolve')}
 FUNCTIONS.update(ket0=lambda:basis(0),ket1=lambda:basis(1),projector=density)

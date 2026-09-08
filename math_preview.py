@@ -28,6 +28,23 @@ def name(value, upright=False):
 
 def same(a,b):return ast.dump(a)==ast.dump(b)
 
+
+def known_ket_label(node):
+    if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+        function=node.func.id;args=node.args
+        if function=='ket' and len(args)==1:return render(args[0])
+        labels={'ket0':'0','ket1':'1','ketplus':'+','ketminus':'−','ketplusi':'+i','ketminusi':'−i'}
+        if function in labels and not args:return element('mi',text=labels[function])
+        if function=='ketbasis' and len(args) in (1,2) and all(isinstance(a,ast.Constant) and type(a.value) is int for a in args):
+            index=args[0].value;count=args[1].value if len(args)==2 else 1
+            if 1<=count<=5 and 0<=index<2**count:return element('mn',text=format(index,f'0{count}b'))
+    return None
+
+
+def ket_label(node):
+    label=known_ket_label(node)
+    return label if label is not None else render(node)
+
 def at_point(value,variables,points):
     vs=variables.elts if isinstance(variables,(ast.List,ast.Tuple)) else [variables]
     ps=points.elts if isinstance(points,(ast.List,ast.Tuple)) else [points]
@@ -70,6 +87,27 @@ def render(node, parent=0):
         return row(render(node.func),fenced(joined([render(a) for a in node.args])))
     if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and not node.keywords:
         function=node.func.id;args=node.args
+        if function in ('field_gradient','field_jacobian','field_hessian','field_divergence','field_curl','field_laplacian','force') and len(args) in (2,3):
+            source=render(args[0])
+            if function=='field_jacobian':symbol=element('msub',name('J'),source)
+            elif function=='field_hessian':symbol=element('msub',name('H'),source)
+            elif function=='field_laplacian':symbol=row(element('msup',op('∇'),element('mn',text='2')),source)
+            else:symbol=row(*( [op('−')] if function=='force' else []),op('∇'),*( [op('·')] if function=='field_divergence' else [op('×')] if function=='field_curl' else []),source)
+            return row(fenced(symbol),fenced(render(args[1])))
+        if function=='work' and 4<=len(args)<=6:
+            parameter=name('t');path=row(render(args[1]),fenced(parameter))
+            integrand=row(render(args[0]),fenced(path),op('·'),element('msup',render(args[1]),op('′')),fenced(parameter))
+            return row(element('msubsup',op('∫'),render(args[2]),render(args[3])),integrand,name('d',True),parameter)
+        if function=='ket' and len(args)==1:return fenced(render(args[0]),'|','⟩')
+        if function in ('ketbasis','ket0','ket1','ketplus','ketminus','ketplusi','ketminusi'):
+            label=known_ket_label(node)
+            if label is not None:return fenced(label,'|','⟩')
+        if function=='bra' and len(args)==1:return fenced(ket_label(args[0]),'⟨','|')
+        if function=='braket' and len(args)==2:return row(op('⟨'),ket_label(args[0]),op('|'),ket_label(args[1]),op('⟩'))
+        if function=='ketbra' and len(args)==2:return row(fenced(ket_label(args[0]),'|','⟩'),fenced(ket_label(args[1]),'⟨','|'))
+        if function=='matrix_element' and len(args)==3:return row(op('⟨'),ket_label(args[0]),op('|'),render(args[1]),op('|'),ket_label(args[2]),op('⟩'))
+        if function in ('tensor','kron') and len(args)==2:
+            return row(render(args[0],21),op('⊗'),render(args[1],21))
         if function in ('sum','summation','product','prod') and len(args)==4:
             symbol=element('msubsup',op('∏' if function in ('product','prod') else '∑'),row(render(args[1]),op('='),render(args[2])),render(args[3]))
             value=row(symbol,fenced(render(args[0])))
@@ -108,7 +146,7 @@ def render(node, parent=0):
 
 
 def preview(source):
-    normalized=normalize_notation(source.strip())
+    normalized=normalize_notation(source.strip(),preserve_ket_lhs=True)
     if not normalized:return {'tree':row()}
     def line_preview(line):
         pieces=re.split(r'(?<![<>=!])=(?!=)',line)

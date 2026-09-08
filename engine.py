@@ -15,6 +15,9 @@ import linear_algebra
 import probability
 import wavelets
 import resident_math
+import random_math
+import field_calculus
+from python_cells import compile_cell
 import datasets as dataset_math
 from datasets import DataColumn, PointSeries
 import numpy as np
@@ -24,6 +27,10 @@ MAX_MATRIX = 32
 
 
 class ExpressionError(ValueError):
+    pass
+
+
+class EvaluationLimit(ExpressionError):
     pass
 
 
@@ -135,11 +142,13 @@ FUNCTIONS.update({'vector':algebraic_vector,'matmul':matmul,'dot':vector_dot,'ou
 probability.install(FUNCTIONS)
 FUNCTIONS.update(wavelets.FUNCTIONS)
 FUNCTIONS.update(resident_math.FUNCTIONS)
-ALGEBRAIC_FUNCTIONS=set(quantum.FUNCTIONS)|set(linear_algebra.FUNCTIONS)|{'vector','matmul','dot','outer','tensor','kron','col','row','bra','hadamard_product',
+FUNCTIONS.update(random_math.FUNCTIONS)
+FUNCTIONS['array']=lambda a:matrix(a) if np.ndim(a)==2 else algebraic_vector(a)
+ALGEBRAIC_FUNCTIONS=set(random_math.FUNCTIONS)|set(quantum.FUNCTIONS)|set(linear_algebra.FUNCTIONS)|{'array','vector','matmul','dot','outer','tensor','kron','col','row','bra','hadamard_product',
     'inv','pinv','T','H','eigvals','expm','logm','solve','eye','matrix','sqrtm','roots'}
 MULTIVARIABLE = {'grad':'gradient', 'gradient':'gradient', 'jacobian':'jacobian', 'hessian':'hessian', 'divergence':'divergence', 'curl':'curl', 'laplacian':'laplacian', 'directional':'directional', 'mixed_diff':'mixed_diff'}
 REDUCTIONS = {'sum','summation','product','prod'}
-CALCULUS = {'prime','diff','derivative','integrate','integral','antiderivative','at'} | set(MULTIVARIABLE)
+CALCULUS = {'prime','diff','derivative','integrate','integral','antiderivative','at'} | set(MULTIVARIABLE) | field_calculus.NAMES
 CONSTANTS = {'pi':np.pi, 'π':np.pi, 'e':np.e, 'i':1j, 'j':1j}
 OPS = {ast.Add:operator.add, ast.Sub:operator.sub, ast.Mult:operator.mul,
        ast.Div:operator.truediv, ast.Pow:power, ast.MatMult:matmul,
@@ -186,6 +195,19 @@ class Calculator:
         for row in rows:
             if row.get('type')=='note':
                 self.items.append({'text':row.get('text',''),'kind':'note'});continue
+            if row.get('type')=='python':
+                item={'text':row.get('text',''),'kind':'python','exports':[]}
+                try:
+                    exports=compile_cell(item['text'],set(FUNCTIONS)|CALCULUS|set(CONSTANTS))
+                    for name,params,tree in exports:
+                        if name in self.definitions or name in self.functions or name in self.dataset_values or name in ('x','y'):
+                            raise ExpressionError(f'Name {name} is reserved or already defined.')
+                    for name,params,tree in exports:
+                        if params is None:self.definitions[name]=tree
+                        else:self.functions[name]=(params,tree)
+                    item['exports']=[{'name':n,'parameters':list(p) if p is not None else None} for n,p,_ in exports]
+                except Exception as exc:item['error']=str(exc)
+                self.items.append(item);continue
             text=row.get('text','').strip()
             item={'text':text,'kind':'value'}
             try:
@@ -233,11 +255,11 @@ class Calculator:
             if self.cancel_ticks % 128 == 1:self.check_cancelled()
         local={} if local is None else local
         if self.sampling_budget is not None:self.sampling_budget.consume()
-        if self.steps==0:self.step_limit=500000 if self.contains_multiple_integrals(node) else 50000
+        if self.steps==0:self.step_limit=500000 if self.contains_calculus(node) else 50000
         self.steps+=1
         if self.steps>self.step_limit or len(stack)>40:
-            raise ExpressionError('Evaluation limit reached; simplify the expression.')
-        if isinstance(node,ast.Constant) and type(node.value) in (int,float,complex):
+            raise EvaluationLimit('Evaluation limit reached; simplify the expression.')
+        if isinstance(node,ast.Constant) and type(node.value) in (int,float,complex,bool):
             if abs(node.value)>1e100: raise ExpressionError('Number is too large.')
             return float(node.value) if type(node.value) is int else node.value
         if isinstance(node,ast.Name):
@@ -268,6 +290,19 @@ class Calculator:
         if isinstance(node,ast.UnaryOp) and isinstance(node.op,(ast.UAdd,ast.USub)):
             a=self.evaluate(node.operand,local,stack)
             return -a if isinstance(node.op,ast.USub) else a
+        if isinstance(node,ast.IfExp):
+            condition=self.evaluate(node.test,local,stack)
+            if np.ndim(condition):
+                return np.where(condition,self.evaluate(node.body,local,stack),self.evaluate(node.orelse,local,stack))
+            return self.evaluate(node.body if condition else node.orelse,local,stack)
+        if isinstance(node,ast.BoolOp):
+            result=self.evaluate(node.values[0],local,stack)
+            for child in node.values[1:]:
+                if not np.ndim(result) and ((isinstance(node.op,ast.And) and not result) or (isinstance(node.op,ast.Or) and result)):return result
+                value=self.evaluate(child,local,stack)
+                result=value if not np.ndim(result) and not np.ndim(value) else (np.logical_and if isinstance(node.op,ast.And) else np.logical_or)(result,value)
+            return result
+        if isinstance(node,ast.UnaryOp) and isinstance(node.op,ast.Not):return np.logical_not(self.evaluate(node.operand,local,stack))
         if isinstance(node,ast.Compare):
             a=self.evaluate(node.left,local,stack);result=True
             for op,right in zip(node.ops,node.comparators):
@@ -345,6 +380,7 @@ class Calculator:
 
     def evaluate_calculus(self,node,local,stack):
         name=node.func.id
+        if name in field_calculus.NAMES:return field_calculus.evaluate(self,node,local,stack)
         if name=='prime':
             if len(node.args) not in (2,3) or not isinstance(node.args[0],ast.Name) or node.args[0].id not in self.functions:
                 raise ExpressionError("Use f'(x) for a defined one-argument function, or diff(expression, variable).")
@@ -447,7 +483,10 @@ class Calculator:
                     else:rel_tol=min(rel_tol,value)
         self.calculus_depth+=dimensions
         try:
-            result,diagnostics=integrate_multiple(lambda point:self.evaluate(expression,context(point),stack),bounds,abs_tol,rel_tol)
+            batch=None
+            if not self.needs_pointwise(expression) and not self.contains_calculus(expression) and not any(self.needs_pointwise(b) for call in chain for b in call.args[2:4]):
+                batch=lambda points:self.evaluate(expression,context(np.asarray(points).T),stack)
+            result,diagnostics=integrate_multiple(lambda point:self.evaluate(expression,context(point),stack),bounds,abs_tol,rel_tol,batch=batch)
             diagnostics['variables']=list(reversed(variables))
             self.calculus_diagnostics.append(diagnostics)
             if len(self.calculus_diagnostics)>20:self.calculus_diagnostics.pop(0)
@@ -499,6 +538,9 @@ class Calculator:
 
     def evaluate_multivariable(self, node, local, stack):
         name = node.func.id
+        if name in ('grad','gradient','jacobian','hessian','divergence','curl','laplacian') and node.args and isinstance(node.args[0],ast.Name) and node.args[0].id in self.functions:
+            alias='field_'+('gradient' if name=='grad' else name)
+            return field_calculus.evaluate(self,ast.Call(func=ast.Name(id=alias),args=node.args,keywords=[]),local,stack)
         count = len(node.args)
         if count not in ((3,) if name == 'at' else (3,4,5) if name == 'directional' else (2,3,4)):
             raise ExpressionError('Use op(expression, [variables][, [point], step]); directional adds a direction before the point, and at requires a point.')
@@ -546,6 +588,10 @@ class Calculator:
                 names=self.free_names(node.args[0],bound|{node.args[1].id},seen)
                 for arg in node.args[2:]:names|=self.free_names(arg,bound,seen)
                 return names
+            if name in ('grad','gradient','jacobian','hessian','divergence','curl','laplacian') and node.args and isinstance(node.args[0],ast.Name) and node.args[0].id in self.functions:
+                names=set()
+                for arg in node.args[1:]:names|=self.free_names(arg,bound,seen)
+                return names
             if (name in MULTIVARIABLE or name == 'at') and len(node.args)>=2 and isinstance(node.args[1],(ast.List,ast.Tuple)):
                 variables={v.id for v in node.args[1].elts if isinstance(v,ast.Name)}
                 names=self.free_names(node.args[0],bound|variables,seen)
@@ -571,9 +617,38 @@ class Calculator:
         for child in ast.iter_child_nodes(node):names|=self.free_names(child,bound,seen)
         return names
 
+    def vector_input_size(self,item,seen=frozenset()):
+        """Infer vector arguments from explicit constant indexing; no evaluation."""
+        if item.get('kind')!='function' or len(item.get('params',()))!=1:return None
+        if item.get('name') in seen:return None
+        seen=seen|{item.get('name')}
+        parameter=item['params'][0];indices=[]
+        for node in ast.walk(item['tree']):
+            if isinstance(node,ast.Subscript) and isinstance(node.value,ast.Name) and node.value.id==parameter and isinstance(node.slice,ast.Constant) and type(node.slice.value) is int and 0<=node.slice.value<32:
+                indices.append(node.slice.value)
+            if isinstance(node,ast.BinOp) and isinstance(node.op,ast.MatMult) and any(isinstance(v,ast.Name) and v.id==parameter for v in (node.left,node.right)):indices.append(0)
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in ('norm','dot','inner','vector','col','row','bra','tensor') and any(isinstance(v,ast.Name) and v.id==parameter for v in node.args):indices.append(0)
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in field_calculus.OPERATIONS and len(node.args)>1 and isinstance(node.args[1],ast.Name) and node.args[1].id==parameter and isinstance(node.args[0],ast.Name) and node.args[0].id in self.functions:
+                name=node.args[0].id;params,body=self.functions[name]
+                size=self.vector_input_size({'kind':'function','name':name,'params':params,'tree':body},seen) if len(params)==1 else len(params)
+                if size:indices.append(size-1)
+        return max(indices)+1 if indices else None
+
+    def contains_logarithm(self,node,seen=frozenset()):
+        if isinstance(node,ast.Name) and node.id in self.definitions and node.id not in seen:
+            return self.contains_logarithm(self.definitions[node.id],seen|{node.id})
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+            name=node.func.id
+            if name in ('log','log10','ln','logbase'):return True
+            if name in self.functions and name not in seen and self.contains_logarithm(self.functions[name][1],seen|{name}):return True
+        return any(self.contains_logarithm(child,seen) for child in ast.iter_child_nodes(node))
+
     def needs_pointwise(self, node, seen=frozenset()):
         """Array entries are algebraic axes, never graph-coordinate axes."""
         if self.contains_multiple_integrals(node):return True
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in field_calculus.NAMES:return True
+        if isinstance(node,(ast.IfExp,ast.BoolOp)):return True
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in ('integrate','integral','antiderivative') and node.args and self.contains_logarithm(node.args[0]):return True
         if isinstance(node, (ast.List, ast.Tuple)):
             return True
         if isinstance(node, ast.Name) and node.id in self.definitions and node.id not in seen:
@@ -648,6 +723,9 @@ class Calculator:
                 with np.errstate(all='ignore'):
                     value = np.asarray(self.evaluate(tree, local), dtype=complex)
             except (ValueError, ArithmeticError, np.linalg.LinAlgError) as exc:
+                if isinstance(exc, EvaluationLimit) and self.contains_multiple_integrals(tree):
+                    first_error = first_error or 'Some multiple-integral coordinates exceeded the per-point work limit. Evaluate a narrower range or split discontinuous integration regions.'
+                    return None
                 if isinstance(exc, ExpressionError):
                     raise
                 first_error = first_error or str(exc)
@@ -663,7 +741,7 @@ class Calculator:
                 raise ExpressionError('Function output shape changes across the input range; use a fixed-size vector or matrix.')
             return value.reshape(-1)[indices]
 
-        axes, values, sampling = sample_grid(self, evaluate_point, ranges, grid_size if grid else 1000, 2000000)
+        axes, values, sampling = sample_grid(self, evaluate_point, ranges, grid_size if grid else 1000, 2000000, initial=3 if self.contains_multiple_integrals(tree) else None)
         xs = axes[0]
         ys = axes[1] if grid else None
         if output_shape is None:
@@ -688,6 +766,8 @@ class Calculator:
                 entry = list(np.unravel_index(flat_index, output_shape))
                 result.update(index=flat_index, label='[' + ', '.join(str(i) for i in entry) + ']')
             components.append(result)
+        if first_error:
+            sampling['notice']=(sampling.get('notice','')+' Some samples were omitted: '+first_error).strip()
         out = dict(components[0])
         out.update(name=item.get('name'), parameters=list(params if surface else params[:1]), sampling=sampling)
         if output_shape:
@@ -707,7 +787,9 @@ class Calculator:
             if item.get('error'):out['error']=item['error']
             if item['kind']=='function':
                 out['function']={'name':item['name'],'parameters':list(item['params']),'body':item['body']}
-            if item.get('tree') is None and item['kind']!='note' and not item.get('error'):out['kind']='empty'
+            if item['kind']=='function' and self.vector_input_size(item):out.update(kind='field_function',input_dimensions=self.vector_input_size(item))
+            if item['kind']=='python':out['exports']=item['exports']
+            if item.get('tree') is None and item['kind'] not in ('note','python') and not item.get('error'):out['kind']='empty'
             results.append(out)
         return results
 
@@ -737,6 +819,10 @@ class Calculator:
             if item['kind']=='function':out['function']={'name':item['name'],'parameters':list(item['params']),'body':item['body']}
             if item.get('error'):
                 results.append({**out,'error':item['error']});continue
+            if item['kind']=='function' and self.vector_input_size(item):
+                out.update(kind='field_function',input_dimensions=self.vector_input_size(item));results.append(out);continue
+            if item['kind']=='python':
+                out['exports']=item['exports'];results.append(out);continue
             if item.get('tree') is None:
                 results.append({**out,'kind':'empty'});continue
             try:

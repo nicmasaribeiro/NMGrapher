@@ -152,7 +152,7 @@ def multivariable(function, point, operation, step=None, direction=None):
                     'input_dimensions':n, 'output_shape':list(f0.shape)}
 
 
-def integrate_multiple(function, bounds, abs_tol=1e-8, rel_tol=1e-7):
+def integrate_multiple(function, bounds, abs_tol=1e-8, rel_tol=1e-7, batch=None):
     """Adaptive tensor Gauss quadrature on a mapped unit square/cube.
 
     Bounds are callbacks in outermost-to-innermost order and may depend on
@@ -186,7 +186,28 @@ def integrate_multiple(function, bounds, abs_tol=1e-8, rel_tol=1e-7):
             raise CalculusError('Integrand is non-finite inside the region; split at singularities.')
         return result
     def rule(lo,hi,n):
+        nonlocal evaluations
         nodes,weights=rules[n];half=(hi-lo)/2;mid=(hi+lo)/2;total=None
+        if batch is not None:
+            indices=np.asarray(list(product(range(n),repeat=dimensions)))
+            units=mid+half*nodes[indices]
+            coordinates=[];jacobian=np.ones(len(indices))
+            for k in range(dimensions):
+                a,b=[np.asarray(v) for v in bounds[k](coordinates)]
+                if any(v.ndim>1 or not np.all(np.isfinite(v)) or np.any(np.imag(v)!=0) for v in (a,b)):
+                    raise CalculusError('Multiple-integral bounds must be finite real values.')
+                a,b=np.broadcast_arrays(a.real,b.real)
+                coordinates.append(a+(b-a)*units[:,k]);jacobian*=b-a
+            points=np.asarray(coordinates).T
+            factors=jacobian*np.prod(weights[indices],axis=1)
+            values=np.asarray(batch(points),dtype=complex)
+            if values.ndim>1 or values.ndim==1 and values.size!=len(points):
+                raise CalculusError('Batched scalar integrand returned an unexpected shape.')
+            values=np.broadcast_to(values,(len(points),));factors=np.asarray(factors)
+            result=np.where(factors==0,0,values*factors)
+            if not np.all(np.isfinite(result)):raise CalculusError('Integrand is non-finite inside the region; split at singularities.')
+            evaluations+=len(points)
+            return np.sum(result)*np.prod(half)
         for indices in product(range(n),repeat=dimensions):
             value=sample(mid+half*nodes[list(indices)])*np.prod(weights[list(indices)])
             total=value if total is None else total+value

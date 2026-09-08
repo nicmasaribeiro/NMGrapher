@@ -6,7 +6,7 @@ from engine import Calculator, parse, ExpressionError, FUNCTIONS, CONSTANTS, CAL
 from notation import normalize_notation
 from sampling import sample_grid
 
-TYPES = {'function', 'parametric', 'polar', 'parametric3d', 'implicit', 'surface', 'contour', 'scatter', 'line', 'bar', 'histogram', 'probability'}
+TYPES = {'vectorfield','vectorfield3d','function', 'parametric', 'polar', 'parametric3d', 'implicit', 'surface', 'contour', 'scatter', 'line', 'bar', 'histogram', 'probability'}
 GRID_TYPES = {'implicit', 'surface', 'contour'}
 DATA_TYPES = {'scatter', 'line', 'bar', 'histogram'}
 MAX_GRAPHS = 12
@@ -40,7 +40,7 @@ def validate_graphs(items):
             if not parameter.isidentifier() or keyword.iskeyword(parameter) or parameter in set(FUNCTIONS) | set(CONSTANTS) | CALCULUS:
                 raise ValueError('Parameter must be a name other than a reserved constant or function.')
             g['parameter'] = parameter
-            for field, default in [('range', [-5, 5]), ('yrange', [-5, 5])]:
+            for field, default in [('range', [-5, 5]), ('yrange', [-5, 5]), ('zrange', [-5,5])]:
                 value = g.get(field, default)
                 if not isinstance(value, list) or len(value) != 2 or any(type(v) not in (int, float) or not np.isfinite(v) or abs(v) > 1e6 for v in value) or not 1e-6 <= value[1] - value[0] <= 1e6:
                     raise ValueError('Ranges need increasing finite bounds within ±1,000,000, with width 0.000001–1,000,000.')
@@ -48,6 +48,15 @@ def validate_graphs(items):
             samples = g.get('samples', 400)
             if type(samples) is not int or not 50 <= samples <= 1000: raise ValueError('Use 50–1000 curve samples.')
             g['samples'] = samples
+        if g['type'] in ('vectorfield','vectorfield3d'):
+            density=g.get('density',7 if g['type']=='vectorfield3d' else 13)
+            if type(density) is not int or not 3<=density<=(11 if g['type']=='vectorfield3d' else 25):raise ValueError('Field grid size must be 3–25 in 2D or 3–11 in 3D.')
+            g['density']=density
+            scale=g.get('arrow_scale',0.8)
+            if type(scale) not in (int,float) or not np.isfinite(scale) or not 0.1<=scale<=2:raise ValueError('Arrow scale must be 0.1–2.')
+            g['arrow_scale']=scale
+            if type(g.get('normalize',False)) is not bool:raise ValueError('Arrow normalization must be true or false.')
+            g.setdefault('normalize',False)
         if g['type'] == 'histogram':
             bins = g.get('bins', 20)
             if type(bins) is not int or not 1 <= bins <= 100: raise ValueError('Use 1–100 histogram bins.')
@@ -91,7 +100,25 @@ class Sampler:
 
 def sample_graph(c, g):
     s = Sampler(c); kind = g['type']
-    out = {'id': g['id'], 'type': kind, 'dimension': 3 if kind in {'surface', 'parametric3d'} else 2}
+    out = {'id': g['id'], 'type': kind, 'dimension': 3 if kind in {'surface', 'parametric3d','vectorfield3d'} else 2}
+    if kind in ('vectorfield','vectorfield3d'):
+        from itertools import product
+        dimension=3 if kind=='vectorfield3d' else 2
+        tree=parse(g['expression']);axes=[np.linspace(*g[key],g['density']) for key in ('range','yrange','zrange')[:dimension]]
+        positions=[];vectors=[];gaps=0
+        for coordinates in product(*axes):
+            try:a=np.asarray(s.value(tree,dict(zip(('x','y','z'),coordinates))),dtype=complex)
+            except (ZeroDivisionError,OverflowError,FloatingPointError):gaps+=1;continue
+            if a.shape!=(dimension,):raise ExpressionError(f'This field needs {dimension} components. Use F([x,y]) or F(x,y), and add z in 3D.')
+            if not np.all(np.isfinite(a)):gaps+=1;continue
+            if np.any(np.abs(a.imag)>1e-10*np.maximum(1,np.abs(a.real))):raise ExpressionError('Arrow fields require real vectors. Select real(F(...)) or imag(F(...)) explicitly.')
+            positions.append(coordinates);vectors.append(a.real.tolist())
+        if not positions:raise ExpressionError('The field has no finite vectors in this region.')
+        magnitudes=np.hypot.reduce(np.abs(vectors),axis=1)
+        if not np.all(np.isfinite(magnitudes)):raise ExpressionError('Field magnitudes exceed the supported numeric range; rescale the field.')
+        out.update(positions=positions,vectors=vectors,magnitudes=magnitudes.tolist(),gaps=gaps,
+                   spacing=min(float(axis[1]-axis[0]) for axis in axes),density=g['density'])
+        return out
     if kind == 'probability':
         import probability
         d=probability.distribution(s.value(parse(g['expression']),{}))

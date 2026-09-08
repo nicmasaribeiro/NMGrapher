@@ -2,6 +2,15 @@
 
 A local Flask graphing calculator inspired by the expression-and-graph workflow of Desmos, with matrices, complex numbers, and named probability distributions, plus the complete modern Greek alphabet. It is an independent implementation, not a full Desmos clone.
 
+NMGrapher's logo follows the supplied N+ badge: a white serif N with a light-blue
+plus on a dark-blue rounded panel. Euler’s identity, an eigenvector equation, a
+definite integral, a Bloch sphere, and a Markov chain with P(t) = exp(tQ) surround
+the main mark. It appears in the application header, browser tab, and bookmark/home
+screen icon. The original PNG and creation details are in `static/brand/`.
+The header logo works with light and dark themes and keeps its space reserved
+while loading. After upgrading, reload the page; an older browser tab icon may
+require closing and reopening the tab to refresh.
+
 ## Run
 
 Use Python 3.11 or newer. From this extracted folder:
@@ -26,7 +35,7 @@ Choose **Light** or **Dark** from the header’s **Theme** selector. Drag an equ
 Function previews update independently of calculations. Completed equations and graphs appear as they finish; the worksheet footer shows progress and a **Stop** button. Existing results stay visible while replacements are calculated.
 
 - **＋ Create graph** creates named Cartesian, parametric, polar, 3D, implicit, surface, contour, scatter, line, bar, histogram, or probability graphs. **My graphs** displays them individually or as 2D/3D overlays.
-- **ƒ Built-in functions** opens a searchable insertion palette for calculus, statistics, hyperbolic functions, wavelets, probability, and linear algebra.
+- **ƒ Built-in functions** opens a searchable insertion palette for calculus, statistics, hyperbolic functions, wavelets, probability, linear algebra, and Quantum / Dirac notation.
 - **Wavelets** analyzes recorded signals from imported columns or pasted samples: continuous wavelet power maps, discrete bands, reconstruction, and denoising.
 - **Probability** creates distributions, calculates densities/masses, cumulative and interval probabilities, and quantiles, and saves probability graphs.
 - Enter one expression per row. Enter adds another row; Shift+Enter adds a line break.
@@ -106,6 +115,7 @@ NMGrapher/
     async_compute.py         Bounded subprocess jobs, scheduling, cancellation
     static/async-compute.js  Incremental job client and obsolete-request cancellation
     symbols.py               Greek alphabet and canonical glyph aliases
+    dirac_notation.py         Ket, bra, inner/outer product notation normalization
     notation.py              Subscript and superscript normalization
     calculus_notation.py     Integral and derivative notation parser
     math_preview.py          Safe semantic MathML preview trees
@@ -1424,3 +1434,331 @@ job was running. The initial job completed in about 2.3 seconds including four
 worker startups; a subsequent two-curve worksheet completed in 53 ms. These
 measurements cover this environment and sample worksheet, not browser paint
 time or a speed guarantee for complex integrals.
+
+
+## Executable ket and bra notation
+
+Open **ƒ Built-in functions → Quantum / Dirac notation** for insertion buttons,
+or choose **Examples → Ket / Dirac notation** for a working worksheet. The
+portable example is also available as `examples/dirac_notation.json` for Open.
+The equation editor and function creator render native MathML ket brackets,
+bras, matrix elements, and tensor products below the input.
+
+| Input | Meaning |
+| --- | --- |
+| `|0⟩`, `|1⟩` | Computational basis column vectors |
+| `|01⟩`, `|101⟩` | Binary register labels; leading zeros preserve the number of qubits |
+| `|+⟩`, `|-⟩` | `( |0⟩ ± |1⟩ ) / sqrt(2)` |
+| `|+i⟩`, `|-i⟩` | `( |0⟩ ± i|1⟩ ) / sqrt(2)` |
+| `|ψ⟩=[1,i]/sqrt(2)` | Define a named ket; ordinary `ψ=...` definitions also work |
+| `|ψ(t)⟩=cos(t)|0⟩+sin(t)|1⟩` | Define a ket-valued function; `|ψ(0)⟩` evaluates it |
+| `⟨ψ|` | Complex-conjugate transpose of the state, a row vector |
+| `⟨φ|ψ⟩` | Scalar inner product, conjugating φ |
+| `|ψ⟩⟨φ|` | Outer product / dyad, conjugating φ |
+| `⟨φ|A|ψ⟩` | General scalar matrix element φ† A ψ |
+| `A|ψ⟩` or `A @ |ψ⟩` | Apply a matrix/operator |
+| `|0⟩|1⟩` or `|0⟩ ⊗ |1⟩` | Tensor product, equal to `|01⟩` |
+| `tensor(a,b)` | General tensor product, including compound state expressions |
+
+ASCII `|psi>`, `<psi|`, `<phi|psi>`, `<phi|A|psi>`, and `|psi><phi|`
+are accepted. Greek keywords keep their usual automatic conversion. Unicode
+`⟨ ⟩` and `〈 〉` are accepted as angle delimiters. Ordinary comparisons such as
+`x < 1` keep their existing meaning. Use `abs(x)` for absolute values.
+
+Basis labels contain **1–5 binary digits**, with the leftmost digit representing
+the leftmost qubit. `|10⟩` is index 2 in a two-qubit register. For a decimal
+index use `ketbasis(index,qubits)`. A named label denotes a vector or a
+state-valued function; it does not create an unspecified abstract state.
+
+Ket notation and `ket(v)` produce **column matrices** of shape `(2**n,1)`;
+bras are conjugate rows. `ket0()`, `ket1()`, and `basis(...)` retain their
+existing flat-vector outputs. `braket(a,b)`, `ketbra(a,b)`, and
+`matrix_element(a,A,b)` also accept flat vectors or columns. A raw matrix
+multiplication of a bra row and ket column yields a 1×1 matrix; the compact
+`⟨φ|ψ⟩` notation returns a scalar. Adjacent bra/ket atoms separated by `*` or
+`@` also use the compact scalar/outer-product interpretation.
+
+Amplitudes are **not normalized automatically**. For example, `2|0⟩` has squared
+norm 4; `⟨ψ|ψ⟩` returns the actual squared norm. Use `state(v)` when normalization
+is intended. Physical operations such as `probabilities`, `bloch`, and `density`
+continue to require valid normalized states. `⟨ψ|A|ψ⟩` is the expectation value
+for a normalized ψ and observable A; otherwise it is the raw quadratic form.
+
+Try these equations:
+
+```text
+|ψ⟩ = (|0⟩ + i|1⟩)/sqrt(2)
+⟨ψ|ψ⟩
+⟨ψ|pauliY()|ψ⟩
+ρ = |ψ⟩⟨ψ|
+|Φ⟩ = (|00⟩ + |11⟩)/sqrt(2)
+probabilities(|Φ⟩)
+|u(t)⟩ = cos(t/2)|0⟩ + sin(t/2)|1⟩
+E(t) = ⟨u(t)|pauliZ()|u(t)⟩
+diff(|u(t)⟩,t,0)
+integrate(|u(t)⟩,t,0,pi)
+```
+
+The first two scalar results are 1, the Bell-state probabilities are
+`[0.5,0,0,0.5]`, and `E(t)=cos(t)`. Ket-valued functions use the existing
+component plotting, calculus, named graphs, and asynchronous evaluation paths.
+Save/Open worksheet preserves the original notation. Note cells remain plain
+text and are never parsed.
+
+This implementation translates Dirac input into bounded, restricted calculator
+calls. It does not run arbitrary Python or add symbolic Hilbert-space algebra.
+General tensor products use `tensor(a,b)`; the infix `⊗` shortcut is for adjacent
+ket atoms. Basis sizes, operator dimensions, and invalid state definitions are
+checked before calculation.
+
+Ket-notation verification: 397 backend/API tests passed, including 40 new Dirac
+checks, and all 11 JavaScript test files passed. Coverage includes conjugation,
+binary basis ordering, normalization rules, safe parsing, MathML previews,
+ket-valued calculus, and spawned parallel evaluation. The bundled worksheet
+was also evaluated successfully through the HTTP API. Browser interaction
+was not visually tested in this environment.
+
+## Random arrays and probability-controlled activation
+
+Choose **Random arrays** in the equation toolbar, or insert functions from
+**Built-in functions → Random arrays**. Sizes range from 1 to 32; matrices
+support up to 32×32 entries.
+
+| Expression | Result |
+| --- | --- |
+| `random_vector(3,42)` | Three independent uniform entries in [0,1) |
+| `random_matrix(3,4,42)` | A 3×4 uniform random matrix |
+| `normal_vector(3,42)` | Three standard normal entries |
+| `normal_matrix(3,4,42)` | A 3×4 standard normal matrix |
+| `activate(A,0.3,42)` | Independently retain each entry with probability 0.3; set other entries to zero |
+| `random_gate(A,0.3,42)` | Retain the entire vector/matrix with probability 0.3; otherwise return zeros of the same shape |
+| `stochastic_matrix(3,42)` | A nonnegative 3×3 matrix whose rows sum to one |
+
+The last argument is a seed, defaulting to 0. Seeds are integers from 0 to
+4,294,967,295. The same arguments produce the same result within the installed
+NumPy version, independent of worker count, row order, graph sampling, or reload.
+The creator's **New seed** button selects a fresh seed; add the resulting equation
+or edit a saved equation's seed to draw another realization. Recalculation alone
+does not reroll values. Different stochastic objects should use distinct seeds.
+`stochastic_matrix` normalizes uniform positive entries; it does not claim a
+uniform distribution over the probability simplex.
+
+For discrete time activation, use `v(t)=activate([1,2,3],0.5,floor(t))` for
+nonnegative t, or add a positive seed offset. Each integer time uses a repeatable
+new mask. These discontinuous random functions are not smooth calculus inputs.
+All generated arrays retain vector/matrix multiplication and analysis behavior.
+
+## Structured mathematical Python cells
+
+Choose **＋ Python**. Code is retained in worksheet JSON and local autosave with
+`type: "python"`; existing version-5 expression and note cells remain compatible.
+Edits recalculate after a short pause; Ctrl/Command+Enter recalculates immediately.
+Export buttons add a corresponding ordinary equation, allowing values and
+functions to be graphed, integrated, differentiated, or used in other cells.
+
+```python
+import numpy as np
+A = random_matrix(2, 2, 42)
+v = np.array([1, 0])
+
+def response(t):
+    weights = A @ v
+    if t < 0:
+        return 0 * weights
+    return np.sin(t) * weights
+```
+
+Add `response(x)` in an expression to plot its components. Another example:
+
+```python
+def polynomial(t):
+    total = 0
+    for k in range(4):
+        total += t ** k
+    return total
+```
+
+Supported syntax: numeric scalars (including Python `1j`), lists, matrices,
+assignments, numeric augmented assignments, plain positional `def`, `return`,
+`if`/`else`, conditional expressions, comparisons, Boolean operations, and
+`for ... in range(...)` with constant integer bounds and at most 32 iterations.
+Use `**` for powers and explicit `*` for multiplication. Each cell is limited to
+1200 characters, 40 exported names, and bounded AST expansion. Loops are expanded
+into mathematical expressions; they are intended for small structured formulas.
+All paths of a function must return a value. Assignment within functions is local;
+worksheet-level exported names must be distinct and cannot replace built-ins.
+
+This is a **mathematical Python subset, not a general Python kernel**. Code is
+compiled into NMGrapher's existing numeric interpreter; no Python `eval` or `exec`
+is used. `import numpy as np` and `import math` establish mathematical aliases
+only; they do not expose the actual modules. For example, `np.sin`, `np.array`,
+`np.eye`, and `math.cos` map to resident functions. Arbitrary imports, file/network
+access, classes, decorators, comprehensions, while loops, mutable array assignment,
+strings, function defaults and unrestricted NumPy APIs are unavailable. Direct
+resident names such as `eigvals`, `integrate`, and `activate` are also available.
+Do not expect Python object methods or full NumPy broadcasting semantics: arrays
+follow NMGrapher's established algebraic rules. Greek keyword substitution is
+disabled inside Python cells so code is preserved verbatim.
+
+## Integral plotting corrections (September 8)
+
+The reported `g(θ,φ)` surface and `i_0(t)` / `i_1(t)` curves were reproduced from
+the supplied worksheet. Double and triple integrals now batch compatible scalar
+integrands and variable-dependent bounds over tensor quadrature nodes. Vector,
+matrix, reduction, and other pointwise integrands retain their existing path.
+The adaptive numerical error test and finite-value checks remain in place.
+Logarithmic integral functions sample upper limits independently; one collection
+of moving logarithmic singularities no longer competes in a single vector
+quadrature call. Smooth integrals retain the efficient vectorized plotting path.
+Numerical calculus has a larger per-point interpreter allowance, while total
+plot work remains bounded. Expensive curves/surfaces retain the finest complete
+grid and show a reduced-detail notice. Failed numerical samples become gaps with
+an explanatory notice; invalid syntax/dependencies still report errors.
+
+The supplied `f_0` and `f_1` are signed wavelet-like functions, not probability
+densities. Their zeros produce logarithmic singularities and negative ratios
+produce principal-branch complex logarithms. Thus `i_0` and `i_1` may legitimately
+have imaginary components; the update does not replace denominators with absolute
+values or silently change the formulas. Integrals at nonintegrable singularities
+still require a changed interval or formula. Finite error estimates are numerical
+estimates, not proofs of convergence.
+
+## Vector fields, force fields, and spatial differential calculus
+
+Choose **Vector fields** in the equation toolbar. Define a field, select 2D or
+3D, and choose **Define & plot field**. For an existing definition, choose
+**Plot existing field**. **Create graph** also offers 2D and 3D vector-field graph
+types with editable coordinate ranges, grid density, arrow scale, and direction-only
+arrows. Field graphs have names, visibility controls, and normal worksheet persistence.
+Use **Examples → Vector fields & forces** for a working rotation/potential example.
+
+A field maps a position vector to a vector:
+
+\[
+\mathbf F:\mathbb R^n\to\mathbb R^n,\qquad
+\mathbf x\mapsto[F_1(\mathbf x),\ldots,F_n(\mathbf x)].
+\]
+
+Both definition styles work:
+
+```text
+F(r) = [-r[1], r[0]]
+G(x,y) = [-y,x]
+F([1,2])
+G(1,2)
+```
+
+The argument may be named `x` as in `F(x)=[-x[1],x[0]]`; its name does not
+change its meaning as a position vector. Indexing starts at zero. In a field
+graph use `F([x,y])` for a position-vector function or `G(x,y)` for separate
+coordinate arguments. A 3D graph uses `F([x,y,z])` or `G(x,y,z)` and requires
+exactly three output components. Python cells can also define these functions.
+
+The equation preview recognizes explicitly indexed vector inputs, vector-only
+operations such as `dot(r,r)` or `A@r`, and force definitions composed from
+recognized spatial functions. Those definitions are shown as spatial functions
+instead of being sampled with a scalar input. The displayed coordinate count is
+an inferred minimum, not a fixed signature. Expressions valid for both scalars
+and vectors (such as `F(r)=-r`) may still display an ordinary curve; they can also
+be used explicitly in a field graph. Spatial calculus accepts 1–32 coordinates;
+arrow visualization supports two or three dimensions.
+
+### Differential operations
+
+Enter a **function name** and a **position vector**. A function with one parameter
+receives the entire position vector; a function with several parameters receives
+one scalar coordinate per parameter. Thus `field_curl(F,[1,2])` and
+`field_curl(G,[1,2])` are equivalent for the definitions above.
+
+| Expression | Mathematics / result |
+| --- | --- |
+| `field_gradient(U,p)` | Gradient of a scalar potential, \(\nabla U\) |
+| `force(U,p)` | Force derived from a scalar potential, \(-\nabla U\) |
+| `field_jacobian(F,p)` | \(J_{ij}=\partial F_i/\partial x_j\); output components are rows, input coordinates are columns |
+| `field_divergence(F,p)` | \(\nabla\cdot F=\sum_i J_{ii}\) |
+| `field_curl(F,[x,y])` | Planar scalar curl, \(\partial F_y/\partial x-\partial F_x/\partial y\) |
+| `field_curl(F,[x,y,z])` | Three-dimensional curl vector, \(\nabla\times F\) |
+| `field_laplacian(F,p)` | Componentwise Laplacian, \((\Delta F)_i=\sum_j\partial^2F_i/\partial x_j^2\) |
+| `field_hessian(U,p)` | Hessian of a scalar potential |
+| `field_directional(F,p,v)` | \((v\cdot\nabla)F=J_Fv\); direction is **not normalized** |
+| `field_convective(F,p)` | \((F\cdot\nabla)F=J_FF\) |
+
+An optional final positive finite step is accepted by these operators; leave it
+out for automatic finite-difference step selection. `grad(U,p)`, `gradient(U,p)`,
+`jacobian(F,p)`, `hessian(U,p)`, `divergence(F,p)`, `curl(F,p)`, and
+`laplacian(F,p)` also accept this function-name/position shorthand. The original
+expression-and-variable syntax remains available:
+
+```text
+jacobian(F([x,y]), [x,y], [1,2])
+divergence(F([x,y]), [x,y], [1,2])
+D(x,y) = field_divergence(F,[x,y])
+```
+
+The existing expression-based `curl(expression,variables,point)` retains its
+three-dimensional convention; function-name curl supports both planar and 3D
+fields. Use a Jacobian for spatial differentiation of a vector argument, rather
+than treating a single prime derivative as a multivariable derivative.
+
+### Force from potential energy
+
+For a unit-stiffness spring in any supported dimension:
+
+```text
+U(r) = dot(r,r)/2
+F(r) = force(U,r)
+F([1,2,3])
+```
+
+This gives \(F(\mathbf r)=-\mathbf r\), so the last expression returns
+approximately `[-1,-2,-3]`. To plot it in 3D, create a 3D vector field with
+expression `F([x,y,z])`. For an attractive inverse-square field, the explicit
+formula `G(r)=-r/norm(r)^3` applies away from the origin; the origin is singular.
+Neither a zero curl at a sampled point nor a finite set of field samples proves
+that an arbitrary field is globally conservative.
+
+### Work along a path
+
+Define a differentiable vector path with one scalar parameter, then use:
+
+```text
+F(r) = [-r[1],r[0]]
+circle(t) = [cos(t),sin(t)]
+work(F,circle,0,2*pi)
+```
+
+The result is approximately \(2\pi\), following
+
+\[
+W=\int_C\mathbf F\cdot d\mathbf r
+ =\int_a^b\mathbf F(\mathbf r(t))\cdot\mathbf r'(t)\,dt.
+\]
+
+`work(F,path,a,b[,abs_tol,rel_tol])` uses an ordinary dot product (not a conjugating
+quantum inner product). Reversing the limits reverses the sign. For a conservative
+force \(F=-\nabla U\), work equals \(U(r(a))-U(r(b))\) on a path where the potential
+is differentiable. The path must return a finite real position vector, matching
+the field's dimension. A complex-valued field can produce complex work, although
+physical force plots require real vectors.
+
+Derivatives and work are numerical. Diagnostics include finite-difference error
+estimates and quadrature error estimates; the work diagnostic separately records
+the maximum estimated tangent error. Quadrature error alone is not a bound on all
+errors in nested derivative calculations. Discontinuities and singularities may
+require splitting a path or integration interval.
+
+### Field display and computation limits
+
+Default grids use 13 points per axis in 2D and 7 in 3D. Supported ranges are 3–25
+points per axis in 2D and 3–11 in 3D. Without direction-only normalization, arrow
+length is proportional to vector magnitude relative to the largest displayed
+magnitude. Arrow scale sets the largest arrow length as a multiple of minimum grid
+spacing; a magnitude-one vector is not necessarily drawn one coordinate unit long.
+With normalization, all nonzero arrows have the same length. Hover at an origin
+for actual components and magnitude. Zero vectors remain visible as dots.
+
+Singular/nonfinite samples are omitted and counted. Complex vectors require an
+explicit real or imaginary component selection; incorrect vector dimensions are
+reported as errors. Arrow plots show samples, not integrated particle trajectories
+or streamlines. Fields use the existing bounded background job system and retain
+its cancellation, parallel computation, and stale-result protection.

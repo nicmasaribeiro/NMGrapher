@@ -18,7 +18,7 @@ class WorkBudget:
         self.used += 1
 
 
-def sample_grid(calculator, evaluate, ranges, target, limit):
+def sample_grid(calculator, evaluate, ranges, target, limit, initial=None):
     """Return the finest completed uniform grid, including both range endpoints.
 
     Cached coordinates are reused between refinement levels. An interrupted
@@ -30,7 +30,7 @@ def sample_grid(calculator, evaluate, ranges, target, limit):
     calculator.sampling_budget = budget
     cache = {}
     completed = None
-    side = min(target, 3 if len(ranges) == 2 else 9)
+    side = min(target, initial or (3 if len(ranges) == 2 else 9))
     try:
         while True:
             fractions = [Fraction(k, side - 1) for k in range(side)]

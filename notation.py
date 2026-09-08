@@ -2,12 +2,14 @@
 import re
 from symbols import normalize_symbols
 from calculus_notation import normalize_calculus, normalize_function_notation
+from dirac_notation import normalize_dirac
 
 SUBSCRIPT = dict(zip('₀₁₂₃₄₅₆₇₈₉ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓᵦᵧᵨᵩᵪ',
                      '0123456789aehijklmnoprstuvxβγρφχ'))
 SUPERSCRIPT = dict(zip('⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁽⁾ⁿⁱ', '0123456789+-()ni'))
 
-def normalize_notation(text):
+def normalize_notation(text, preserve_ket_lhs=False):
+    text = normalize_dirac(text, preserve_lhs=preserve_ket_lhs)
     text = normalize_calculus(text)
     # x₁ and x_{1} both name x_1; A[0,1] remains element indexing.
     text = re.sub('['+''.join(SUBSCRIPT)+']+',
