@@ -17,6 +17,8 @@ import wavelets
 import resident_math
 import random_math
 import field_calculus
+import energy_models
+import trajectories
 from python_cells import compile_cell
 import datasets as dataset_math
 from datasets import DataColumn, PointSeries
@@ -143,12 +145,14 @@ probability.install(FUNCTIONS)
 FUNCTIONS.update(wavelets.FUNCTIONS)
 FUNCTIONS.update(resident_math.FUNCTIONS)
 FUNCTIONS.update(random_math.FUNCTIONS)
+FUNCTIONS.update(energy_models.FUNCTIONS)
+FUNCTIONS.update(trajectories.FUNCTIONS)
 FUNCTIONS['array']=lambda a:matrix(a) if np.ndim(a)==2 else algebraic_vector(a)
-ALGEBRAIC_FUNCTIONS=set(random_math.FUNCTIONS)|set(quantum.FUNCTIONS)|set(linear_algebra.FUNCTIONS)|{'array','vector','matmul','dot','outer','tensor','kron','col','row','bra','hadamard_product',
+ALGEBRAIC_FUNCTIONS=set(energy_models.FUNCTIONS)|set(random_math.FUNCTIONS)|set(quantum.FUNCTIONS)|set(linear_algebra.FUNCTIONS)|{'array','vector','matmul','dot','outer','tensor','kron','col','row','bra','hadamard_product',
     'inv','pinv','T','H','eigvals','expm','logm','solve','eye','matrix','sqrtm','roots'}
 MULTIVARIABLE = {'grad':'gradient', 'gradient':'gradient', 'jacobian':'jacobian', 'hessian':'hessian', 'divergence':'divergence', 'curl':'curl', 'laplacian':'laplacian', 'directional':'directional', 'mixed_diff':'mixed_diff'}
 REDUCTIONS = {'sum','summation','product','prod'}
-CALCULUS = {'prime','diff','derivative','integrate','integral','antiderivative','at'} | set(MULTIVARIABLE) | field_calculus.NAMES
+CALCULUS = {'prime','diff','derivative','integrate','integral','antiderivative','at','iterate','trajectory'} | set(MULTIVARIABLE) | field_calculus.NAMES
 CONSTANTS = {'pi':np.pi, 'π':np.pi, 'e':np.e, 'i':1j, 'j':1j}
 OPS = {ast.Add:operator.add, ast.Sub:operator.sub, ast.Mult:operator.mul,
        ast.Div:operator.truediv, ast.Pow:power, ast.MatMult:matmul,
@@ -322,15 +326,17 @@ class Calculator:
                 result=probability.method(self.evaluate(node.func.value,local,stack),node.func.attr,args)
             else:
                 if len(args)!=1:raise ExpressionError('A distribution function needs one coordinate.')
-                result=probability.call(self.evaluate(node.func,local,stack),args[0])
+                target=self.evaluate(node.func,local,stack)
+                result=energy_models.energy_probability(target,args[0]) if isinstance(target,energy_models.EnergyModel) else probability.call(target,args[0])
             return np.asarray(result).view(DataColumn) if any(isinstance(a,DataColumn) for a in args) and np.ndim(result)==1 else result
         if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and not node.keywords:
             name=node.func.id
             if name in REDUCTIONS and len(node.args)==4:return self.evaluate_reduction(node,local,stack)
+            if name in ('iterate','trajectory'):return trajectories.evaluate_operator(self,node,local,stack)
             if name in CALCULUS:return self.evaluate_calculus(node,local,stack)
             args=[self.evaluate(n,local,stack) for n in node.args]
             if name in FUNCTIONS:
-                result=FUNCTIONS[name](*args)
+                result=energy_models.energy_sample(*args,check=self.check_cancelled) if name=='energy_sample' else FUNCTIONS[name](*args)
                 if name!='stats' and any(isinstance(a,DataColumn) for a in args) and np.ndim(result)==1:return np.asarray(result).view(DataColumn)
                 if np.ndim(result)==2 and (name in ALGEBRAIC_FUNCTIONS or any(isinstance(a,MatrixValue) for a in args)):
                     return matrix(result)
@@ -344,7 +350,8 @@ class Calculator:
                 return self.evaluate(tree,dict(zip(params,args)),stack+(name,))
             if name in self.definitions or name in local:
                 if len(args)!=1:raise ExpressionError('A distribution function needs one coordinate.')
-                result=probability.call(self.evaluate(node.func,local,stack),args[0])
+                target=self.evaluate(node.func,local,stack)
+                result=energy_models.energy_probability(target,args[0]) if isinstance(target,energy_models.EnergyModel) else probability.call(target,args[0])
                 return np.asarray(result).view(DataColumn) if isinstance(args[0],DataColumn) and np.ndim(result)==1 else result
             raise ExpressionError(f'Unknown function: {name}')
         if isinstance(node,ast.Subscript):
@@ -504,6 +511,23 @@ class Calculator:
             if name in self.functions and name not in seen:return self.returns_distribution(self.functions[name][1],seen|{name})
         return False
 
+    def returns_energy_model(self,node,seen=frozenset()):
+        if isinstance(node,ast.Name) and node.id in self.definitions and node.id not in seen:
+            return self.returns_energy_model(self.definitions[node.id],seen|{node.id})
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+            name=node.func.id
+            if name in ('rbm','boltzmann_machine'):return True
+            if name in self.functions and name not in seen:return self.returns_energy_model(self.functions[name][1],seen|{name})
+        return False
+
+    def returns_trajectory(self,node,seen=frozenset()):
+        if isinstance(node,ast.Name) and node.id in self.definitions and node.id not in seen:
+            return self.returns_trajectory(self.definitions[node.id],seen|{node.id})
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+            if node.func.id in ('gbm','iterate','trajectory'):return True
+            if node.func.id in self.functions and node.func.id not in seen:return self.returns_trajectory(self.functions[node.func.id][1],seen|{node.func.id})
+        return False
+
     def contains_multiple_integrals(self,node,seen=frozenset(),depth=0):
         if isinstance(node,ast.Name) and node.id in self.definitions and node.id not in seen:
             return self.contains_multiple_integrals(self.definitions[node.id],seen|{node.id},depth)
@@ -628,6 +652,7 @@ class Calculator:
                 indices.append(node.slice.value)
             if isinstance(node,ast.BinOp) and isinstance(node.op,ast.MatMult) and any(isinstance(v,ast.Name) and v.id==parameter for v in (node.left,node.right)):indices.append(0)
             if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in ('norm','dot','inner','vector','col','row','bra','tensor') and any(isinstance(v,ast.Name) and v.id==parameter for v in node.args):indices.append(0)
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in ('energy','free_energy','energy_probability','hidden_probabilities','reconstruct') and len(node.args)>1 and isinstance(node.args[1],ast.Name) and node.args[1].id==parameter:indices.append(0)
             if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id in field_calculus.OPERATIONS and len(node.args)>1 and isinstance(node.args[1],ast.Name) and node.args[1].id==parameter and isinstance(node.args[0],ast.Name) and node.args[0].id in self.functions:
                 name=node.args[0].id;params,body=self.functions[name]
                 size=self.vector_input_size({'kind':'function','name':name,'params':params,'tree':body},seen) if len(params)==1 else len(params)
@@ -819,6 +844,8 @@ class Calculator:
             if item['kind']=='function':out['function']={'name':item['name'],'parameters':list(item['params']),'body':item['body']}
             if item.get('error'):
                 results.append({**out,'error':item['error']});continue
+            if item['kind']=='function' and len(item['params'])==4 and (tuple(item['params'])==('s','k','t','dt') or any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='iterate' and n.args and isinstance(n.args[0],ast.Name) and n.args[0].id==item['name'] for other in self.items if other.get('tree') is not None for n in ast.walk(other['tree']))):
+                out.update(kind='update_function');results.append(out);continue
             if item['kind']=='function' and self.vector_input_size(item):
                 out.update(kind='field_function',input_dimensions=self.vector_input_size(item));results.append(out);continue
             if item['kind']=='python':
@@ -834,6 +861,11 @@ class Calculator:
                     if current_point and variable not in ('x','y') and not names and variable not in self.definitions and variable not in self.dataset_values and variable not in CONSTANTS:
                         item={**item,'kind':'function','params':(variable,)};kind='function';out['plot_parameters']=[variable]
 
+                if kind=='function' and self.returns_trajectory(tree):
+                    out.update(kind='trajectory_function',name=item.get('name'));results.append(out);continue
+                if kind=='function' and self.returns_energy_model(tree):
+                    out.update(kind='energy_model_function',name=item.get('name'))
+                    results.append(out);continue
                 if kind=='function' and self.returns_distribution(tree):
                     out.update(kind='distribution_function',name=item.get('name'))
                     results.append(out);continue
@@ -876,6 +908,10 @@ class Calculator:
                     if is_complex:out.update(imag=clean(im),magnitude=clean(np.abs(v)),phase=clean(phase(v)))
                 else:
                     with np.errstate(all='ignore'):v=self.evaluate(tree)
+                    if isinstance(v,trajectories.Trajectory):
+                        out.update(kind='trajectory',name=item.get('name'),trajectory=trajectories.report(v));results.append(out);continue
+                    if isinstance(v,energy_models.EnergyModel):
+                        out.update(kind='energy_model',name=item.get('name'),model=energy_models.pack(v),energy_model=energy_models.describe(v));results.append(out);continue
                     if isinstance(v,(wavelets.DiscreteTransform,wavelets.ContinuousTransform)):
                         out.update(kind='wavelet_transform',name=item.get('name'),transform=wavelets.transform_summary(v))
                         results.append(out);continue

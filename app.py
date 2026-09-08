@@ -1,6 +1,6 @@
 """Run this file in your IDE, then open http://127.0.0.1:5000."""
 import math
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 from engine import Calculator, parse, ExpressionError
 import linear_algebra
 from math_preview import preview
@@ -9,6 +9,19 @@ from datasets import parse_delimited, DatasetError
 
 app=Flask(__name__)
 app.config['MAX_CONTENT_LENGTH']=2*1024*1024
+
+from async_compute import BackendUnavailable
+
+@app.errorhandler(BackendUnavailable)
+def compute_unavailable(error):
+    return jsonify(error=str(error)),503
+
+@app.get('/api/compute/status')
+def compute_status():
+    from async_compute import manager
+    if manager.mode=='celery':return jsonify(manager.status())
+    return jsonify(mode=manager.mode,workers=manager.workers,available=True,notice=manager.notice)
+
 
 @app.get('/')
 def index():
@@ -61,7 +74,7 @@ def evaluate():
 
 @app.after_request
 def background_cache_policy(response):
-    if request.path.startswith('/api/jobs'):
+    if request.path.startswith(('/api/jobs','/api/compute','/api/energy/jobs','/api/trajectories/jobs')):
         response.headers['Cache-Control']='no-store'
     return response
 
@@ -200,6 +213,95 @@ def dataset_preview():
         return jsonify(parse_delimited(payload.get('text'),payload.get('delimiter','auto'),payload.get('header',True),payload.get('decimal','.')))
     except DatasetError as exc:
         return jsonify(error=str(exc)),400
+
+def energy_context(raw):
+    import energy_models as em
+    payload=evaluation_payload(raw)
+    c=Calculator(payload['expressions'],payload['datasets'])
+    source=raw.get('source','')
+    if not isinstance(source,str) or len(source)>1200:raise ValueError('Model source must be an expression up to 1200 characters.')
+    m=em.model(c.evaluate(parse(source))) if source.strip() else em.unpack(raw.get('model'))
+    return m,c
+
+
+@app.post('/api/energy')
+def energy_analysis():
+    import energy_models as em
+    try:
+        raw=request.get_json(silent=True)
+        if not isinstance(raw,dict):raise ValueError('Supply energy-model settings.')
+        if raw.get('action')=='initialize':
+            m=em.initialize(raw.get('kind','rbm'),raw.get('visible',4),raw.get('hidden',2),raw.get('seed',42),raw.get('temperature',1))
+        else:m,_=energy_context(raw)
+        return jsonify(analysis=em.analyze(m,count=raw.get('count',64),seed=raw.get('seed',42)))
+    except (ValueError,TypeError,IndexError) as exc:return jsonify(error=str(exc)),400
+
+
+@app.post('/api/energy/jobs')
+def energy_training():
+    import energy_models as em
+    from async_compute import manager,JobCapacityError
+    try:
+        raw=request.get_json(silent=True)
+        if not isinstance(raw,dict):raise ValueError('Supply an energy model and training data.')
+        m,c=energy_context(raw)
+        data=raw.get('data')
+        source=raw.get('data_expression','')
+        columns=raw.get('data_columns',[])
+        if not isinstance(source,str) or len(source)>1200:raise ValueError('Data expression must be text up to 1200 characters.')
+        if not isinstance(columns,list) or len(columns)>16 or any(not isinstance(v,str) or v not in c.dataset_values for v in columns):raise ValueError('Select existing dataset columns, in visible-unit order.')
+        if source.strip() and columns:raise ValueError('Choose a matrix expression or dataset columns.')
+        if source.strip():c.steps=0;data=c.evaluate(parse(source))
+        elif columns:
+            import numpy as np
+            values=[c.dataset_values[name] for name in columns]
+            if len({len(v) for v in values})!=1:raise ValueError('Dataset columns must have the same number of rows.')
+            data=np.column_stack(values)
+        data=em.training_data(data,m.visible,raw.get('binarize',False),raw.get('threshold',.5))
+        options=em.options(raw.get('options',{}),m,len(data))
+        payload=dict(expressions=[],datasets=[],graphs=[],bounds=[-1,1,-1,1],complex_domain=False,curve_range=None,
+                     energy_task=dict(model=em.pack(m),data=data.tolist(),options=options))
+        return jsonify(manager.submit(payload)),202
+    except JobCapacityError as exc:return jsonify(error=str(exc)),429
+    except (ValueError,TypeError,IndexError) as exc:return jsonify(error=str(exc)),400
+
+
+@app.post('/api/trajectories/jobs')
+def trajectory_job():
+    import trajectories
+    from async_compute import manager,JobCapacityError
+    try:
+        raw=request.get_json(silent=True);payload=evaluation_payload(raw)
+        calculator=Calculator(payload['expressions'],payload['datasets'])
+        payload.update(graphs=[],trajectory_task=trajectories.settings(raw.get('trajectory')))
+        return jsonify(manager.submit(payload,calculator)),202
+    except JobCapacityError as exc:return jsonify(error=str(exc)),429
+    except (ValueError,TypeError) as exc:return jsonify(error=str(exc)),400
+
+
+@app.post('/api/trajectories/export')
+def trajectory_export():
+    import trajectories
+    from pathlib import Path
+    try:
+        raw=request.get_json(silent=True)
+        if not isinstance(raw,dict):raise ValueError('Supply a trajectory to export.')
+        data=trajectories.validate_report(raw.get('trajectory'));options=raw.get('options',{})
+        if not isinstance(options,dict):raise ValueError('Supply playback options.')
+        display='time' if data['kind']=='gbm' else options.get('display','2d')
+        if display not in ('time','2d','3d'):raise ValueError('Choose a time, 2D, or 3D view.')
+        coords=options.get('coordinates','0,1');name=options.get('name','Trajectory')
+        if not isinstance(coords,str) or len(coords)>30 or not isinstance(name,str) or not 1<=len(name.strip())<=80:raise ValueError('Use a name up to 80 characters and valid coordinate indices.')
+        if data['kind']!='gbm':
+            indices=[int(v.strip()) for v in coords.split(',')]
+            if len(indices)!=dict(time=1,**{'2d':2,'3d':3})[display] or len(set(indices))!=len(indices) or any(i<0 or i>=data['dimensions'] for i in indices):raise ValueError('Select valid distinct state component indices.')
+        clean=dict(name=name.strip(),display=display,coordinates=coords,speed=trajectories.number(options.get('speed',1),'Speed',.1,8),trail=trajectories.number(options.get('trail',0),'Trail',0,2000,True))
+        root=Path(app.static_folder)
+        scripts={key:(root/file).read_text().replace('</script','<\\/script') for key,file in [('plotly_source','plotly.min.js'),('player_source','trajectory-tools.js')]}
+        content=render_template('trajectory_player.html',trajectory=data,options=clean,**scripts)
+        return Response(content,mimetype='text/html',headers={'Content-Disposition':'attachment; filename="NMGrapher-trajectory.html"'})
+    except (ValueError,TypeError,IndexError) as exc:return jsonify(error=str(exc)),400
+
 
 @app.errorhandler(413)
 def too_large(_):return jsonify(error='Request exceeds 2 MB; reduce the dataset size.'),413

@@ -1,0 +1,25 @@
+x-compute: &compute
+  NMGRAPHER_COMPUTE_BACKEND: celery
+  NMGRAPHER_CELERY_BROKER_URL: redis://redis:6379/0
+  NMGRAPHER_REDIS_URL: redis://redis:6379/1
+services:
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --maxmemory, 256mb, --maxmemory-policy, noeviction, --save, "", --appendonly, "no"]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  web:
+    build: .
+    ports: ["127.0.0.1:5000:5000"]
+    environment: *compute
+    depends_on:
+      redis: {condition: service_healthy}
+  worker:
+    build: .
+    environment: *compute
+    command: python -m celery -A celery_app:celery_app worker --loglevel=INFO --concurrency=4 --hostname=worker@%h --queues=nmgrapher
+    depends_on:
+      redis: {condition: service_healthy}

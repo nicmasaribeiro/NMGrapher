@@ -151,7 +151,8 @@ def normalize_function_notation(text,depth=0):
     prime=re.compile(r'('+NAME+r")\s*(''|'|′|″|’)\s*(?=\()")
     while position<len(text):
         if position==0 or not (text[position-1].isalnum() or text[position-1]=='_'):
-            if text.startswith('log_',position):
+            # This resident function is a name, not a variable-base logarithm.
+            if text.startswith('log_',position) and not re.match(r'log_partition\b',text[position:]):
                 base,end=bound(text,position+4);end=skip_space(text,end)
                 if end<len(text) and text[end]=='(':
                     operand,end=group(text,end)

@@ -37,6 +37,8 @@ Function previews update independently of calculations. Completed equations and 
 - **＋ Create graph** creates named Cartesian, parametric, polar, 3D, implicit, surface, contour, scatter, line, bar, histogram, or probability graphs. **My graphs** displays them individually or as 2D/3D overlays.
 - **ƒ Built-in functions** opens a searchable insertion palette for calculus, statistics, hyperbolic functions, wavelets, probability, linear algebra, and Quantum / Dirac notation.
 - **Wavelets** analyzes recorded signals from imported columns or pasted samples: continuous wavelet power maps, discrete bands, reconstruction, and denoising.
+- **Trajectories** generates GBM, parametric, and sequential-algorithm paths, with playback and offline animation/CSV exports.
+- **Energy models** builds and trains binary Boltzmann machines and RBMs, with energy/probability analysis, validation metrics, and generated samples.
 - **Probability** creates distributions, calculates densities/masses, cumulative and interval probabilities, and quantiles, and saves probability graphs.
 - Enter one expression per row. Enter adds another row; Shift+Enter adds a line break.
 - Import numeric datasets from CSV/TSV or pasted tables, preview columns, plot points/lines, and use named columns in equations.
@@ -56,7 +58,7 @@ Function previews update independently of calculations. Completed equations and 
 - **Domain map** evaluates one-argument functions on complex inputs and displays magnitude or phase.
 - **αβ Symbols** inserts all 24 Greek letters in both cases and common glyph variants at the cursor, including inside matrix cells.
 - **Transform** visualizes a real 2×2 matrix acting on a square grid, unit circle, and basis vectors.
-- **Save worksheet** downloads JSON. **Open** restores a saved JSON worksheet. Current work also autosaves in this browser's local storage.
+- **Save worksheet** opens a filename dialog. Enter a name, then choose **Download worksheet**; `.json` is added automatically. The name is remembered in browser autosave and the saved worksheet. **Open** restores a saved JSON worksheet and its name; older worksheets use the opened filename. Current work also autosaves in this browser's local storage.
 - **PNG** downloads the current plot. **Reference** opens the expression guide.
 
 ## Expression examples
@@ -1383,7 +1385,7 @@ qubit/distribution creation evaluate only the requested output rows.
 
 ### Worker configuration and hosting
 
-Set `NMGRAPHER_WORKERS` before starting Flask to choose 1–4 processes. The default
+Set `NMGRAPHER_WORKERS` before starting Flask to choose 1–16 processes. The default
 is the smaller of four and the available CPU count. Native BLAS/OpenMP thread
 pools are limited to one thread per process by threadpoolctl to avoid multiplying
 CPU threads. A host that cannot spawn processes falls back to at most two
@@ -1395,10 +1397,10 @@ deadline, 120-second completed-result retention, 64 MB of output per job, and
 worker at a time and shares capacity across active jobs. These defaults can be
 changed in `JobManager` when embedding the server.
 
-Job state belongs to the Flask process. `python app.py` runs the supported local
+In default local mode, job state belongs to the Flask process. `python app.py` runs the supported local
 configuration. For WSGI hosting use **one threaded server worker**, or ensure
 sticky routing to the same server process for job creation, polling, and
-cancellation. Independent WSGI processes do not share job state. Restart Flask
+cancellation. Independent WSGI processes in local mode do not share job state. Use the Celery mode below for shared state across processes. Restart Flask
 after installing this update, then use Reload system in the browser.
 
 ### Background API
@@ -1762,3 +1764,492 @@ explicit real or imaginary component selection; incorrect vector dimensions are
 reported as errors. Arrow plots show samples, not integrated particle trajectories
 or streamlines. Fields use the existing bounded background job system and retain
 its cancellation, parallel computation, and stale-result protection.
+
+## Energy models: Boltzmann machines and RBMs
+
+Open **Energy models** to initialize, edit, analyze, and train a binary model.
+The **Restricted Boltzmann model** and **Boltzmann model & temperature** examples
+provide worksheet definitions. `examples/energy_models.json` also includes a
+training table and named free-energy and force-field graphs.
+
+### Build and train
+
+1. Choose an RBM or a fully visible BM, unit counts, temperature, and seed, then
+   click **Initialize model**. Edit weights and biases directly as JSON arrays if
+   needed. Changing unit counts requires initialization or matching parameter
+   arrays. **Load model** accepts an existing worksheet name or model expression.
+2. Supply a JSON table (one observation per row), a worksheet matrix expression,
+   or comma-separated imported dataset column names in visible-unit order.
+   Training accepts 1–2048 rows. Values must be 0 or 1; explicitly enable
+   threshold binarization for continuous data. Missing/nonfinite values are
+   rejected. Import CSV/TSV through **Import data** first.
+3. Choose epochs, learning rate, weight decay, seed, and validation fraction. An
+   RBM additionally uses mini-batch size and CD Gibbs steps. Click **Train model**.
+   Training runs in a background worker; close the dialog to keep using the
+   worksheet. **Stop training** cancels the job and retains the last completed
+   model. Reopening the studio shows the completed result. Editing studio inputs
+   invalidates pending results; intermediate parameter checkpoints are not saved.
+4. Inspect weights, the most likely visible states, exact probabilities and
+   energies where available, and learning curves. **Add model to worksheet**
+   creates parameter cells and a reusable model definition. Use a new name to
+   avoid existing definitions. **Add samples as dataset** stores generated binary
+   patterns for graphing, statistics, or subsequent training.
+
+The studio's completed model, parameter drafts, training data/source settings,
+and learning history are included in **Save worksheet** and browser autosave.
+Training uses a snapshot of the supplied model and data. Export creates a separate
+worksheet definition; later studio training does not silently replace that row.
+Full-precision matrices are split into row definitions when needed to respect
+1200-character cells; the complete export must fit within the worksheet's 40 cells.
+
+### Model conventions
+
+All units are **binary 0/1**, using dimensionless temperature with k_B = 1.
+For an RBM, W has visible rows and hidden columns, a is the visible bias vector,
+and b is the hidden bias vector:
+
+\[
+E(v,h)=-a^Tv-b^Th-v^TWh,\qquad
+p(v,h)=\frac{\exp(-E(v,h)/T)}{Z}.
+\]
+
+The visible free energy analytically sums the binary hidden states:
+
+\[
+F(v)=-a^Tv-T\sum_j\log(1+\exp((b_j+(W^Tv)_j)/T)),\qquad
+p(v)=\exp(-F(v)/T-\log Z).
+\]
+
+A fully visible BM uses symmetric W with zero diagonal:
+
+\[
+E(s)=-\tfrac12s^TWs-a^Ts,\qquad p(s)=\exp(-E(s)/T-\log Z).
+\]
+
+The factor one-half counts each undirected interaction once. Positive weights
+favor coactivation under these energy conventions. RBM training uses CD-k;
+fully visible BM training enumerates all states for exact model expectations in
+maximum-likelihood gradient updates. Both support L2 weight decay (biases are
+unpenalized). CD-k is an approximate learning algorithm. Background workers limit
+native BLAS threads to avoid oversubscribing the CPU.
+
+The RBM implementation follows the binary energy and conditional-probability
+conventions in [Hinton, *A Practical Guide to Training Restricted Boltzmann
+Machines* (2010)](https://www.cs.toronto.edu/~hinton/absps/guideTR.pdf).
+
+### Reusable worksheet functions
+
+```text
+M = rbm([[2,-2],[2,-2]], [-1,-1], [-2,2])
+energy(M,[1,1],[1,0])
+free_energy(M,[1,1])
+M([1,1])
+B = boltzmann_machine([[0,3],[3,0]],[-1.5,-1.5])
+B([0,0])
+R(t) = rbm([[2,-2],[2,-2]],[-1,-1],[-2,2],t)
+p(t) = energy_probability(R(t),[1,1])
+```
+
+Temperature defaults to 1; restrict a temperature plot to a positive interval
+within 0.05–20. `B([0,0])` and `B([1,1])` are each approximately 0.408787. The two
+mixed states share the remaining probability.
+
+| Function | Result |
+| --- | --- |
+| `rbm(W,a,b[,T])` | Bernoulli restricted Boltzmann model |
+| `boltzmann_machine(W,a[,T])` | Fully visible binary Boltzmann model |
+| `energy(M,v,h)` | RBM joint energy; omit h for a fully visible BM |
+| `free_energy(M,v)` | RBM visible free energy; ordinary energy for a fully visible BM |
+| `energy_probability(M,v)` or `M(v)` | Exact probability of a binary visible vector |
+| `log_partition(M)` | Natural log of the exact partition function, including RBM hidden states |
+| `hidden_probabilities(M,v)` | RBM hidden activation probabilities conditioned on v |
+| `reconstruct(M,v)` | Mean-field visible probabilities after a hidden-probability pass |
+| `energy_sample(M,n,seed[,burn,thin])` | n binary sample rows; worksheet n is 1–32, burn defaults to 100, thin to 5 |
+| `energy_state(k,n)` | Length-n binary vector for integer k, most significant bit first |
+| `energy_weights(M)` | Model weight matrix |
+| `energy_bias(M)` | Visible bias vector |
+| `hidden_bias(M)` | Hidden bias vector (empty for a fully visible BM) |
+
+These functions are searchable under **Built-in functions → Energy models**.
+Model-valued function definitions can be called with parameters and reused by
+energy/probability functions. The existing `boltzmann(energies,T)` remains the
+finite energy-level distribution in the probability suite.
+
+### Energies, graphs, and differential mathematics
+
+Exact state probabilities are defined on binary vectors. Energy and free-energy
+functions also accept real coordinates, allowing a **continuous relaxation** of
+the energy formula to be graphed and differentiated:
+
+```text
+U(r) = free_energy(M,r)
+F(r) = force(U,r)
+field_gradient(U,[0.2,0.7])
+field_hessian(U,[0.2,0.7])
+F([0.2,0.7])
+```
+
+Create a surface or contour graph with `free_energy(M,[x,y])`, or a vector-field
+graph with `F([x,y])`. These are continuous relaxations, not a continuous density
+or the physical dynamics of the discrete model. The derivatives use the existing
+numerical differential operators. The studio's state plot shows exact binary
+probabilities and energy (visible free energy for an RBM) for at most the 32 most
+likely states; its title reports the probability mass covered.
+
+### Diagnostics and limits
+
+- Fully visible BMs support 1–12 units. RBMs support 1–16 visible and 1–16 hidden
+  units. Exact normalization, state probabilities, visible entropy, expected
+  joint energy, and negative log-likelihood (NLL) are available up to **12 visible
+  units**; an RBM sums over its hidden units analytically. Above this limit,
+  training, energies, reconstruction, and sampling remain available.
+- Validation rows are selected reproducibly and excluded from updates. With a
+  nonzero validation fraction and at least two observations, at least one row is
+  held out and one retained for training. Splitting is random by row; repeated
+  patterns can occur in both sets. Use zero validation for an all-data toy fit.
+- Learning curves contain up to 52 checkpoints, including epoch zero and the
+  final epoch. NLL is natural-log loss per observation. Reconstruction MSE is a
+  mean-field diagnostic, **not a likelihood or a generalization guarantee**.
+  Compare held-out NLL when exact normalization is available. Training history
+  appears after the job finishes; progress is a running/stopped state, not live
+  per-epoch streaming.
+- The studio generates 64 Gibbs samples per analysis. Samples can be correlated,
+  and finite burn-in does not guarantee equilibrium. The seed reproduces a run;
+  it does not guarantee representative mixing. The API accepts 1–512 samples.
+- Parameters must initially lie in ±100. Training clips values to these bounds
+  and reports clipping; reduce learning rate if clipping occurs. Temperature is
+  0.05–20; epochs 1–2000; CD steps 1–20; batch size 1–256. A work estimate rejects
+  oversized combinations, and training inherits the background job deadline.
+- These are small binary models. Gaussian/continuous units, deep Boltzmann
+  machines, arbitrary neural energy networks, and general BMs with interacting
+  hidden units are not implemented.
+
+`POST /api/energy` initializes or analyzes a model. `POST /api/energy/jobs` starts
+training; poll and cancel through the existing `/api/jobs/<id>` endpoints. Model
+JSON fields are `kind` (`rbm` or `bm`), `weights`, `visible_bias`, `hidden_bias`,
+and `temperature`. Training options are `epochs`, `rate`, `k`, `batch`, `decay`,
+`seed`, and `validation`. Data may be supplied as `data`, `data_expression`, or
+`data_columns`, accompanied by worksheet `expressions` and `datasets` as needed.
+
+## Trajectories, GBM, and sequential algorithms
+
+Open **Trajectories** to generate and animate paths. Choose a source, enter its
+settings, and click **Generate paths**, then **Play**. Generation runs in the
+background and can be cancelled; independent worksheet computations can continue.
+Playback uses the completed samples, so it never reruns a random draw or update
+rule. A full pass takes ten seconds at 1× speed, independent of the modeled time
+unit. Use Pause, Restart, Full path, the time scrubber, speed, and trail length
+(0 keeps the full history). Closing the dialog or hiding the browser tab pauses
+playback. Plot rendering is serialized and throttled to at most 20 updates per
+second; the frame counter may skip sampled points during fast playback, while
+exports retain every sample.
+
+Three sources are available:
+
+| Source | Inputs and behavior |
+| --- | --- |
+| Geometric Brownian motion | Positive initial value, constant drift, constant volatility, horizon, steps, number of independent paths, and seed |
+| Parametric function | A scalar or 1–8 component vector expression in t, or a worksheet function such as r(t) |
+| Sequential algorithm | Initial scalar/vector state and an expression producing the complete next state from the previous state |
+
+GBM paths display value over time. Other trajectories can display one state
+component over time, two components as a 2D path, or three as a 3D path. Component
+indices start at zero: `0`, `0,1`, or `0,1,2`, respectively. Higher-dimensional
+states can include positions, velocities, or algorithm memory; select the
+components to visualize. Moving markers show the current state and the trail
+shows the preceding samples. Axes are fixed from the complete generated path.
+
+### Geometric Brownian motion
+
+The app uses the SDE drift convention
+
+\[
+dS_t=\mu S_t\,dt+\sigma S_t\,dW_t,
+\]
+
+with the exact sampled transition
+
+\[
+S_{k+1}=S_k\exp\!\left((\mu-\tfrac12\sigma^2)\Delta t
+  +\sigma\sqrt{\Delta t}\,Z_k\right),\qquad Z_k\sim N(0,1).
+\]
+
+The horizon and parameters must use consistent units. For annual drift and
+volatility, set horizon 1 and steps 252 to obtain 252 equally spaced steps in one
+year; no calendar or trading-day lookup is performed. The default seed is 42.
+The same inputs reproduce the paths; adding paths preserves existing paths for
+the same seed and time grid. **New seed** selects a different simulation seed.
+
+The dashed line is the theoretical mean, and the shaded area is the theoretical
+central 95% interval at each time:
+
+\[
+\mathbb E[S_t]=S_0e^{\mu t},\qquad
+\operatorname{Var}(S_t)=S_0^2e^{2\mu t}(e^{\sigma^2t}-1),
+\]
+
+\[
+q_{.025,.975}(t)=S_0\exp\!\left((\mu-\sigma^2/2)t
+\mp1.95996398454\,\sigma\sqrt t\right).
+\]
+
+The shading is a **pointwise probability interval**, not a confidence interval
+for an estimated mean and not a band containing 95% of complete paths. GBM uses
+constant supplied parameters; it does not fit market data or produce a calibrated
+forecast. The implementation uses the lognormal increment construction described
+in [Karl Sigman's Columbia notes on geometric Brownian
+motion](https://www.columbia.edu/~ks20/FE-Notes/4700-07-Notes-GBM.pdf). Those notes
+use μ for log drift; NMGrapher's μ is the SDE drift, so its log drift is μ−σ²/2.
+
+### Sequential rules and mathematical Python
+
+In the studio, enter an initial state and a **Next state** expression. The
+available bindings at update k are:
+
+| Name | Meaning |
+| --- | --- |
+| `s` | Current state vector; scalar initial states are represented as `[value]` |
+| `k` | Zero-based update index |
+| `t` | Current modeled time, start + k·dt |
+| `dt` | Horizon divided by the number of steps |
+
+Each update is evaluated once in order, and its output becomes the next input.
+There are steps + 1 stored states, including the initial state. State dimensions
+must stay constant. The app does not automatically normalize probabilities,
+convert a derivative into an update, stabilize an unstable iteration, or stop
+when a convergence threshold is reached.
+
+The example picker includes GBM, a 3D helix, exact matrix rotation, the logistic
+map, gradient descent, and Markov probability propagation. For example:
+
+```text
+Initial state: [3,2]
+Next state: s - dt*[2*s[0],4*s[1]]
+Horizon: 3
+Steps: 150
+```
+
+This is gradient descent on U(s)=s₀²+2s₁² with step size dt=0.02. For an existing
+potential U(r), the update `s-dt*field_gradient(U,s)` uses the differential suite.
+An ODE derivative F(s) requires an explicit method, such as forward Euler
+`s+dt*F(s)`; accuracy and stability then depend on the step size. The rotation
+example instead uses a rotation matrix for each step.
+
+A mathematical Python cell can define the update:
+
+```python
+def update(s, k, t, dt):
+    force = [-s[1], s[0]]
+    next_state = s + dt * force
+    return next_state
+```
+
+Use `update(s,k,t,dt)` in the studio, or create a worksheet trajectory:
+
+```text
+A = iterate(update,[1,0],400,0.01)
+trajectory_times(A)
+trajectory_path(A,0,0)
+trajectory_path(A,0,1)
+```
+
+The function must take four arguments in that order. This uses the app's existing
+mathematical Python subset; it does not enable arbitrary Python execution.
+Random arrays may be used in updates; vary their seed with k if each step needs a
+new draw, for example `s+sqrt(dt)*normal_vector(2,42+k)`.
+
+### Worksheet objects and exports
+
+```text
+G = gbm(100,0.05,0.2,1,252,8,42)
+trajectory_times(G)
+trajectory_path(G,0)
+gbm_mean(100,0.05,1)
+r(t) = [cos(t),sin(t),t/4]
+C = trajectory(r,0,12.566370614359172,400)
+trajectory_path(C,0,2)
+```
+
+Use **Animate trajectory** under a trajectory result to open it in the studio.
+`trajectory_path(G,path,component)` returns a complete dataset-style column;
+`trajectory_times(G)` returns the corresponding time column. Both work with
+statistics, interpolation, and named data graphs. The Built-in functions palette
+includes the constructors and accessors. Model-valued functions such as
+`paths(a)=gbm(a,0.05,0.2)` can also be defined and evaluated at specific parameters.
+
+- **Add paths as dataset** preserves all generated coordinates in the worksheet.
+  Columns are time and path_1, path_2, … for GBM, or path_1_state_0, … for vectors.
+  Existing dataset capacity limits apply; up to eight columns are initially shown.
+- **Download CSV** exports all samples, regardless of current playback position.
+- **Download animation (.html)** exports an offline animation with its data,
+  plotting library, play/pause controls, time scrubber, and speed controls. It is
+  an interactive HTML animation, not an MP4 or GIF video.
+- **Download frame (.png)** exports the currently displayed plot frame.
+
+Generation settings are saved with the worksheet and restored on reload. Click
+Generate paths to recreate a studio run; save a generated dataset to retain its
+values independently of later formula edits. GBM's seed and settings reproduce
+its values. Custom paths are invalidated if their worksheet definitions change.
+`examples/trajectories.json` includes GBM, a helix, a sequential update function,
+and saved studio settings.
+
+Limits: 1–1999 steps, 1–24 GBM paths, 1–8 state components, and 50,000 values
+including the time column. GBM requires S₀ in [1e−12,1e12], μ in [−10,10], σ in
+[0,5], and a positive horizon up to 100. Extremely large/small outcomes are
+rejected explicitly. Sequential/parametric horizons may extend to 100,000 time
+units and use a bounded evaluation budget and the background-job deadline.
+An invalid or divergent state stops generation with its step/time; partial
+results are not presented as a successful complete trajectory.
+
+`POST /api/trajectories/jobs` takes worksheet expressions/datasets plus a
+`trajectory` settings object. Poll/cancel via `/api/jobs/<id>`.
+`POST /api/trajectories/export` accepts a completed trajectory and display options
+and returns the self-contained HTML animation. No additional Python packages are
+required for these features.
+
+## Distributed calculations with Celery and Redis
+
+The default `python app.py` workflow still uses local processes and needs only
+`requirements.txt`. For additional independent calculation workers, enable
+Celery. Each expression or named graph becomes a separate task; training and
+trajectory generation use the same queue. Each task receives the complete
+worksheet context from a shared snapshot, so functions can depend on other rows
+without depending on their display order. Results appear as tasks finish.
+A single expression is evaluated within one task; adding workers increases
+concurrency across tasks, not the speed of every individual integral.
+
+### Docker setup: eight calculation slots
+
+From the extracted NMGrapher directory:
+
+```sh
+docker compose up --build --scale worker=2
+```
+
+Open http://127.0.0.1:5000. Each worker container has four processes; two containers
+provide eight calculation slots. Increase `--scale worker=N` according to available
+CPU and memory. The web service remains responsive while workers calculate.
+Redis is internal to the Docker network. The included Flask server and loopback
+binding are intended for local use; use a production WSGI server for hosted use.
+
+### Separate terminals or worker hosts
+
+Install the optional dependencies on Flask and worker hosts:
+
+```sh
+python -m pip install -r requirements-celery.txt
+```
+
+Start Redis, then set these variables in **each** Flask/worker environment:
+
+```sh
+export NMGRAPHER_COMPUTE_BACKEND=celery
+export NMGRAPHER_CELERY_BROKER_URL=redis://127.0.0.1:6379/0
+export NMGRAPHER_REDIS_URL=redis://127.0.0.1:6379/1
+```
+
+Start Flask in one terminal:
+
+```sh
+python app.py
+```
+
+Start workers in separate terminals (use distinct node names):
+
+```sh
+python -m celery -A celery_app:celery_app worker --concurrency=4 --hostname=worker1@%h --queues=nmgrapher
+python -m celery -A celery_app:celery_app worker --concurrency=4 --hostname=worker2@%h --queues=nmgrapher
+```
+
+Celery prefork workers run on Linux/macOS; use the Docker setup on Windows.
+Use PowerShell `$env:NAME='value'` instead of `export` for Flask configuration on
+Windows. For workers on separate machines, both URLs must point to the same
+reachable Redis service, with the same `NMGRAPHER_REDIS_PREFIX` (default
+`nmgrapher`). Keep that service private and configure authentication/TLS for a
+remote deployment. Use separate broker databases/queues for unrelated apps.
+`NMGRAPHER_WORKERS` controls local mode only; Celery uses `--concurrency` and the
+number of worker nodes. Native numeric library thread pools are limited to one
+thread per worker process to prevent CPU oversubscription.
+
+The worksheet footer shows responding Celery nodes and process slots. Click it
+to refresh status. `/api/compute/status` exposes the same information; zero nodes
+means no workers on the calculation queue responded to the status request.
+Worker counts are a current observation, not a guarantee that every slot is idle.
+
+### Shared state and recovery
+
+Multiple Flask processes can create, poll and cancel the same job. Redis stores
+bounded worksheet snapshots, progress, and results. Atomic updates ignore duplicate
+result deliveries and results arriving after cancellation. Stopping/reloading an
+individual Flask process does not cancel shared jobs. Redis/broker failures return
+HTTP 503 with an actionable message; Celery mode does not silently switch to
+process-local state.
+
+Defaults: 16 active jobs, 32 retained jobs, a 180-second deadline including queue
+wait, 300-second result retention after completion/cancellation, 64 MiB output per
+job, and 128 MiB retained snapshots/results overall. Old completed jobs may be
+evicted earlier to admit new jobs. Configure these limits in `RedisJobManager`
+when embedding. Polling does not extend retention. Worker tasks also have a
+180-second soft limit and 190-second hard limit. Deadlines are converted from
+Redis time to local monotonic budgets, avoiding clock differences between hosts.
+
+Celery uses JSON messages, one reserved task per process, late acknowledgments,
+and bounded retries when shared state is temporarily unavailable. A worker crash
+can cause a task to execute again; atomic result deduplication prevents counting
+it twice. Superseded/cancelled tasks check shared cancellation at computation
+checkpoints. Queued tasks check state before computing. Deadline checks prevent
+orphaned work from running indefinitely. Completed jobs are temporary: save the
+worksheet/datasets to preserve your work. The included Redis container does not
+persist temporary jobs across container replacement.
+
+Implementation references: [Celery configuration](https://docs.celeryq.dev/en/stable/userguide/configuration.html)
+and [Celery tasks](https://docs.celeryq.dev/en/stable/userguide/tasks.html).
+
+## Surface display controls
+
+Select **Surface**, or a surface in **My graphs**, then open **Surface controls**.
+
+- Name the X, Y and Z axes; blank labels retain the function's parameter names.
+- Set independent display ranges or leave both endpoints blank for automatic
+  limits. These limits clip the view; they do not change sampling bounds.
+- Choose linear or logarithmic axes. Log coordinates and limits must be positive;
+  incompatible data produces a clear message rather than disappearing silently.
+- Choose automatic proportions, equal data units, a cube, or a custom vertical
+  ratio from 0.1 to 10. Select isometric, top, front or side camera presets;
+  perspective/orthographic projection; and rotate/pan dragging.
+- Adjust color scales, reverse colors, color bounds, opacity, grid/panels,
+  contour lines, and Z contour projection. Overlaid surfaces share a color range
+  and a single color legend. Automatic coloring preserves phase
+  coloring for phase surfaces and uses a height gradient for other surfaces.
+
+Apply changes using existing samples, without submitting a calculation job.
+Change **Input range** (or a saved graph's sampling ranges) when you need new
+function samples. Display settings and the last camera position are saved with
+the worksheet and browser autosave. Settings apply to the worksheet's surface
+plots, including saved surface graphs; the Bloch sphere keeps its own display.
+Camera position survives incremental calculation updates. **Reset view** resets
+the surface camera without changing the sampled domain; **Restore display
+defaults** clears custom axis/color limits and appearance choices. The surface
+modebar also exposes Plotly's interactive 3D controls and image export.
+
+Axis handling follows the [Plotly 3D axes API](https://plotly.com/javascript/3d-axes/).
+
+### Verification
+
+```sh
+python -m pytest -q
+for test in tests/test_*.js; do node "$test"; done
+```
+
+Celery tests require the optional dependencies plus a `redis-server` binary
+(or `redislite` installed for testing). Set `NMGRAPHER_TEST_REDIS_SERVER` if the
+binary is outside PATH. Tests start an isolated Redis instance and two real
+Celery nodes with three processes each; they never flush an existing Redis
+service. Without those dependencies the Celery tests are skipped. They cover
+cross-instance polling, duplicate delivery, cancellation, deadlines, retention,
+queue/output bounds, service errors, and real multi-worker calculations.
+
+Verified for this update: 502 Python tests and 19 JavaScript test files passed,
+including two real Celery nodes with six total calculation processes. Docker
+Compose configuration was parsed; Docker execution and browser visual inspection
+were not available in the build environment.

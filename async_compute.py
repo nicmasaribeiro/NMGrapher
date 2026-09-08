@@ -2,7 +2,7 @@
 
 No executor or thread starts at import time. The standard spawn context works
 with macOS/Windows IDE execution as well as a threaded Flask server. Job state
-belongs to one WSGI process: use one threaded WSGI worker or sticky routing.
+belongs to one WSGI process in local mode. Celery mode shares state via Redis.
 """
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, CancelledError
@@ -20,6 +20,10 @@ import uuid
 
 
 class JobCapacityError(ValueError):
+    pass
+
+
+class BackendUnavailable(RuntimeError):
     pass
 
 
@@ -57,14 +61,30 @@ class _CancellationToken:
 
 def compute_task(payload, kind, index, token_path, deadline):
     """Top-level spawn/pickle entry point; worksheet text stays in the safe AST."""
+    return compute_payload(payload,kind,index,_CancellationToken(token_path,deadline))
+
+
+def compute_payload(payload,kind,index,check):
+    """Shared computation body for local processes and independent Celery workers."""
     from engine import Calculator, ComputationCancelled
-    check = _CancellationToken(token_path, deadline)
     started = time.monotonic()
     if check():
         return {'cancelled': True}
     calculator = Calculator(payload['expressions'], payload['datasets'], cancel_check=check)
     try:
-        if kind == 'row':
+        if kind == 'trajectory':
+            import trajectories
+            try:result=trajectories.report(trajectories.compute(calculator,payload['trajectory_task']))
+            except ComputationCancelled:raise
+            except Exception as exc:result={'error':str(exc) or 'Trajectory generation failed.'}
+        elif kind == 'energy':
+            import energy_models
+            try:
+                task=payload['energy_task']
+                result=energy_models.train(energy_models.unpack(task['model']),task['data'],task['options'],check=calculator.check_cancelled)
+            except ComputationCancelled:raise
+            except Exception as exc:result={'error':str(exc) or 'Energy-model training failed.'}
+        elif kind == 'row':
             result = calculator.run(payload['bounds'], complex_domain=payload['complex_domain'],
                                     curve_range=payload['curve_range'], indices=[index])[0]
         else:
@@ -84,6 +104,29 @@ def compute_task(payload, kind, index, token_path, deadline):
                 'duration_ms': round((time.monotonic() - started) * 1000, 1)}
     except ComputationCancelled:
         return {'cancelled': True}
+
+
+def plan_tasks(payload,calculator):
+    ready = []
+    ranked = []
+    for index, item in enumerate(calculator.items):
+        if item['kind'] == 'note' or item.get('error') or item.get('tree') is None:
+            ready.append({'kind': 'row', 'index': index, 'result': calculator.metadata([index])[0]})
+            continue
+        tree = item['tree']
+        priority = (4 if calculator.contains_multiple_integrals(tree) else
+                    3 if calculator.contains_calculus(tree) else
+                    2 if calculator.needs_pointwise(tree) else
+                    1 if item['kind'] in ('function', 'implicit', 'explicit', 'inequality') or calculator.free_names(tree) else 0)
+        ranked.append((priority, 'row', index))
+    for index, graph in enumerate(payload['graphs']):
+        if not graph['visible']:
+            ready.append({'kind': 'graph', 'index': index, 'result': {'id': graph['id'], 'hidden': True}})
+        else:
+            ranked.append((2, 'graph', index))
+    if 'energy_task' in payload:ranked.append((4,'energy',0))
+    if 'trajectory_task' in payload:ready=[];ranked=[(4,'trajectory',0)]
+    return ready,sorted(ranked,key=lambda item:item[0])
 
 
 @dataclass
@@ -112,7 +155,7 @@ class JobManager:
         if workers is None:
             try: workers = int(configured) if configured else min(4, os.cpu_count() or 1)
             except ValueError: workers = 2
-        self.workers = max(1, min(4, workers))
+        self.workers = max(1, min(16, workers))
         self.mode = 'process'
         self.notice = None
         self.max_active = max_active
@@ -186,23 +229,7 @@ class JobManager:
         payload = json.loads(json.dumps(payload))
         from engine import Calculator
         calculator = calculator or Calculator(payload['expressions'], payload['datasets'])
-        ready = []
-        ranked = []
-        for index, item in enumerate(calculator.items):
-            if item['kind'] == 'note' or item.get('error') or item.get('tree') is None:
-                ready.append({'kind': 'row', 'index': index, 'result': calculator.metadata([index])[0]})
-                continue
-            tree = item['tree']
-            priority = (4 if calculator.contains_multiple_integrals(tree) else
-                        3 if calculator.contains_calculus(tree) else
-                        2 if calculator.needs_pointwise(tree) else
-                        1 if item['kind'] in ('function', 'implicit', 'explicit', 'inequality') or calculator.free_names(tree) else 0)
-            ranked.append((priority, 'row', index))
-        for index, graph in enumerate(payload['graphs']):
-            if not graph['visible']:
-                ready.append({'kind': 'graph', 'index': index, 'result': {'id': graph['id'], 'hidden': True}})
-            else:
-                ranked.append((2, 'graph', index))
+        ready,ranked=plan_tasks(payload,calculator)
         pending = deque((kind, index) for _, kind, index in sorted(ranked, key=lambda item: item[0]))
         with self._condition:
             self._prune()
@@ -384,6 +411,21 @@ class JobManager:
             self._directory.cleanup()
 
 
-# Lazy singleton: importing app.py never spawns subprocesses (including in children).
-manager = JobManager()
+class LazyCeleryManager:
+    def __init__(self):self._manager=None;self._lock=threading.Lock()
+    def __getattr__(self,name):
+        with self._lock:
+            if self._manager is None:
+                try:
+                    from celery_compute import RedisJobManager
+                    self._manager=RedisJobManager()
+                except ImportError as exc:raise BackendUnavailable('Celery mode requires requirements-celery.txt. Install it and start Redis and a Celery worker.') from exc
+        return getattr(self._manager,name)
+    def close(self):pass  # Closing one Flask process must not cancel shared jobs.
+
+
+# Neither backend opens connections or starts workers during import.
+_backend=os.environ.get('NMGRAPHER_COMPUTE_BACKEND','local').strip().lower()
+if _backend not in ('local','celery'):raise ValueError('NMGRAPHER_COMPUTE_BACKEND must be local or celery.')
+manager = LazyCeleryManager() if _backend=='celery' else JobManager()
 atexit.register(manager.close)
